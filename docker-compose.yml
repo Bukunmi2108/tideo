@@ -120,6 +120,7 @@ services:
       dockerfile: Dockerfile.worker
     volumes:
       - .:/app
+      - data:/data
     env_file:
       - .env
     healthcheck:
@@ -142,6 +143,7 @@ volumes:
   pg_data:
   rabbitmq_data:
   kafka_data:
+  data:
 
 networks:
   tideo-net:
