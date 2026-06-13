@@ -1,1 +1,30 @@
-docs/PLAN.md
+# --- Project-private (kept out of the repo) ---
+docs/
+
+# --- Secrets / local env ---
+.env
+.env.*.local
+
+# --- Python ---
+.venv/
+__pycache__/
+*.py[cod]
+.python-version
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# --- Editor / OS ---
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+frontend/node_modules/
+frontend/dist/
+
+fixtures/*
+!fixtures/reference/

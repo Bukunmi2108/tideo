@@ -1,0 +1,6 @@
+.venv/
+.git/
+docs/
+fixtures/
+frontend/
+__pycache__/
