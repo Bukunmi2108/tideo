@@ -14,7 +14,7 @@ from fixtures_spec import FIXTURES  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 FIXTURES_DIR = ROOT / "fixtures"
-FORCE = bool(os.environ.get("FORCE"))
+FORCE = os.environ.get("FORCE", "").lower() in {"1", "true", "yes"}
 
 
 def _tmp_path(name: str) -> Path:
@@ -58,15 +58,10 @@ def build_truncate(spec: dict, out: Path) -> None:
         full.unlink(missing_ok=True)
 
 
-def build_text(spec: dict, out: Path) -> None:
-    out.write_text(spec["content"])
-
-
 BUILDERS = {
     "ffmpeg": build_ffmpeg,
     "speech": build_speech,
     "truncate": build_truncate,
-    "text": build_text,
 }
 
 
@@ -80,8 +75,12 @@ def main() -> None:
             continue
         tmp = _tmp_path(name)
         print(f"build  {name} ...")
-        BUILDERS[spec["kind"]](spec, tmp)
-        os.replace(tmp, final)
+        try:
+            BUILDERS[spec["kind"]](spec, tmp)
+            os.replace(tmp, final)
+        except Exception:
+            tmp.unlink(missing_ok=True)
+            raise
         print(f"  ok   {name}")
     print("fixtures complete")
 

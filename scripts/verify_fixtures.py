@@ -33,7 +33,7 @@ def check(spec: dict) -> list[str]:
     path = FIXTURES_DIR / name
     expect = spec["expect"]
     if not path.exists():
-        return [f"missing file"]
+        return ["missing file"]
 
     rc, data = probe(path)
     streams = data.get("streams", [])

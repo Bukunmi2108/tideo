@@ -4,7 +4,6 @@ kinds:
   ffmpeg   - one ffmpeg invocation: inputs + args + output
   speech   - flite TTS -> wav, then mux looped audio over a video source
   truncate - build a source (no faststart), keep the first `keep` fraction of bytes
-  text     - write plain bytes (not a real media file)
 """
 
 FIXTURES = [
