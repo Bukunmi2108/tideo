@@ -1,4 +1,4 @@
-.PHONY: up down ps laogs nuke
+.PHONY: up down ps logs nuke fixtures verify-fixtures
 
 up:
 	docker compose up -d
@@ -14,3 +14,9 @@ logs:
 
 nuke:
 	docker compose down -v
+
+fixtures:
+	docker compose run --rm --no-deps -e FORCE celery python scripts/make_fixtures.py
+
+verify-fixtures:
+	docker compose run --rm --no-deps celery python scripts/verify_fixtures.py
