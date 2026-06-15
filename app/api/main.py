@@ -1,10 +1,14 @@
 import asyncio
-
+import logging
 from fastapi import FastAPI, Response, status
-
+from fastapi.responses import JSONResponse
+from app.api.errors import ApiError
+from app.api.routes import upload
 from app.core.config import config
 
 app = FastAPI(title="Tideo", version="0.0.1")
+logger = logging.getLogger(__name__)
+app.include_router(upload.router)
 
 # (name, host, port) for every dependency /readyz probes.
 DEPENDENCIES = [
@@ -14,6 +18,16 @@ DEPENDENCIES = [
     ("rabbitmq", config.rabbitmq_host, config.rabbitmq_port),
 ]
 
+@app.exception_handler(ApiError)
+async def _api_error(request, exc):
+    return JSONResponse(status_code=exc.status, content={"error": {
+        "code": exc.code, "message": exc.message, "job_id": exc.job_id, "retryable": exc.retryable}})
+
+@app.exception_handler(Exception)
+async def _unhandled(request, exc):
+    logger.exception("unhandled error")
+    return JSONResponse(status_code=500, content={"error": {
+        "code": "INTERNAL", "message": "internal error", "job_id": None, "retryable": False}})
 
 @app.get("/healthz")
 def healthz():

@@ -14,6 +14,8 @@ services:
       timeout: 5s
       retries: 3
       start_period: 5s
+    volumes:
+      - data:/data
     networks:
       - tideo-net
     depends_on:
