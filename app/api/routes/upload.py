@@ -10,6 +10,7 @@ from app.core.config import config
 from app.storage.state import get_client
 from app.storage.writer import stream_to_disk
 from app.workers.celery_app import app as celery_app
+from app.storage import dedupe
 
 router = APIRouter(tags=["Upload"])
 
@@ -43,6 +44,20 @@ async def upload(request: Request, filename: str | None = None):
         "content_hash": content_hash,
         "created_at": now_iso(),
     })
+
+    if await dedupe.claim(r, content_hash, job_id):
+        celery_app.send_task("app.workers.tasks.inspect.probe", args=[str(dest)])
+        return JSONResponse(status_code=202, content={"job_id": job_id, "status": "inspecting", "dedupe": "miss"})
+
+    owner_id = await dedupe.owner(r, content_hash)
+    if owner_id and await dedupe.is_valid(r, owner_id):
+        shutil.rmtree(dest.parent, ignore_errors=True)
+        await r.delete(f"job:{job_id}")
+        status = await r.hget(f"job:{owner_id}", "status")
+        return JSONResponse(status_code=202, content={"job_id": owner_id, "status": status, "dedupe": "hit"})
+
+    await dedupe.reclaim(r, content_hash, job_id)
+
     celery_app.send_task("app.workers.tasks.inspect.probe", args=[str(dest)])
 
     return JSONResponse(
