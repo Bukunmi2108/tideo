@@ -6,8 +6,8 @@ _async = aioredis.Redis(host=config.redis_host, port=config.redis_port, decode_r
 _sync = redis.Redis(host=config.redis_host, port=config.redis_port, decode_responses=True)
 
 
-def get_client() -> aioredis.Redis: 
+def get_client() -> aioredis.Redis:
     return _async
 
-def get_sync_client() -> redis.Redis: 
+def get_sync_client() -> redis.Redis:
     return _sync

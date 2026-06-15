@@ -3,12 +3,13 @@ import logging
 from fastapi import FastAPI, Response, status
 from fastapi.responses import JSONResponse
 from app.api.errors import ApiError
-from app.api.routes import upload
+from app.api.routes import upload, job
 from app.core.config import config
 
 app = FastAPI(title="Tideo", version="0.0.1")
 logger = logging.getLogger(__name__)
 app.include_router(upload.router)
+app.include_router(job.router)
 
 # (name, host, port) for every dependency /readyz probes.
 DEPENDENCIES = [

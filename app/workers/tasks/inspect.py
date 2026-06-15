@@ -2,13 +2,20 @@ import json
 from dataclasses import asdict
 from app.core.config import config
 from app.domain import recommend
+from app.domain.state import transition
 from app.storage.state import get_sync_client
 from app.workers import ffprobe
 from app.workers.base import InspectTask
 from app.workers.celery_app import app
 import logging
+from typing import cast
 
 logger = logging.getLogger(__name__)
+
+
+def _current_status(r, job_id: str) -> str:
+    return cast(str, r.hget(f"job:{job_id}", "status") or "inspecting")
+
 
 @app.task(base=InspectTask)
 def probe(job_id: str, src: str) -> dict:
@@ -18,8 +25,12 @@ def probe(job_id: str, src: str) -> dict:
         recommend.check_caps(meta, config.max_source_seconds)
         safe, reason = recommend.web_safe(meta)
         presets = recommend.recommended_presets(meta.height)
+        cur = _current_status(r, job_id)
+        nxt = transition(cur, "awaiting_choice", job_id=job_id, caller="inspect")
+        if nxt is None:
+            return {"status": "dropped", "job_id": job_id}
         r.hset(f"job:{job_id}", mapping={
-            "status": "awaiting_choice",
+            "status": nxt,
             "source_meta": json.dumps(asdict(meta)),
             "web_safe": "true" if safe else "false",
             "web_safe_reason": reason or "",
@@ -28,8 +39,12 @@ def probe(job_id: str, src: str) -> dict:
         logger.info("inspect ok job=%s presets=%s web_safe=%s", job_id, presets, safe)
         return {"status": "ok", "job_id": job_id}
     except ffprobe.InspectError as e:
+        cur = _current_status(r, job_id)
+        nxt = transition(cur, "failed", job_id=job_id, caller="inspect")
+        if nxt is None:
+            return {"status": "dropped", "job_id": job_id}
         r.hset(f"job:{job_id}", mapping={
-            "status": "failed",
+            "status": nxt,
             "error_code": e.code, "error_message": e.message, "error_stage": "inspect",
         })
         logger.error("inspect failed job=%s code=%s", job_id, e.code)
