@@ -78,6 +78,7 @@ class SourceMeta:
 
 SOURCE_CORRUPT = "SOURCE_CORRUPT"
 SOURCE_NO_VIDEO = "SOURCE_NO_VIDEO"
+SOURCE_LIMITS_EXCEEDED = "SOURCE_LIMITS_EXCEEDED"
 
 class InspectError(Exception):
     def __init__(self, code: str, message: str):

@@ -46,7 +46,7 @@ async def upload(request: Request, filename: str | None = None):
     })
 
     if await dedupe.claim(r, content_hash, job_id):
-        celery_app.send_task("app.workers.tasks.inspect.probe", args=[str(dest)])
+        celery_app.send_task("app.workers.tasks.inspect.probe", args=[job_id, str(dest)])
         return JSONResponse(status_code=202, content={"job_id": job_id, "status": "inspecting", "dedupe": "miss"})
 
     owner_id = await dedupe.owner(r, content_hash)
@@ -58,7 +58,7 @@ async def upload(request: Request, filename: str | None = None):
 
     await dedupe.reclaim(r, content_hash, job_id)
 
-    celery_app.send_task("app.workers.tasks.inspect.probe", args=[str(dest)])
+    celery_app.send_task("app.workers.tasks.inspect.probe", args=[job_id, str(dest)])
 
     return JSONResponse(
         status_code=202,
