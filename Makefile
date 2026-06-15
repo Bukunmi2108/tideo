@@ -13,7 +13,7 @@ logs:
 	docker compose logs -f -t
 
 nuke:
-	docker compose down -v
+	docker compose down -v --remove-orphans
 
 fixtures:
 	docker compose run --rm --no-deps -e FORCE celery python scripts/make_fixtures.py

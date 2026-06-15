@@ -71,10 +71,8 @@ services:
       - "15672:15672"
     env_file:
       - .env
-    environment:
-      RABBITMQ_ERLANG_COOKIE: tideo_dev_cookie
     healthcheck:
-      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      test: ["CMD", "nc", "-z", "-w2", "127.0.0.1", "5672"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -115,20 +113,46 @@ services:
     networks:
       - tideo-net
   
-  celery:
-    container_name: celery_worker
+  worker-heavy:
+    container_name: tideo_worker_heavy
     build:
       context: .
       dockerfile: Dockerfile.worker
+    command: celery -A app.workers.celery_app worker -Q transcode --concurrency=2 --prefetch-multiplier=1 -n heavy@%h --loglevel=info
     volumes:
       - .:/app
       - data:/data
     env_file:
       - .env
     healthcheck:
-      test: ["CMD", "celery", "-A", "app.workers.celery_app", "inspect", "ping"]
-      interval: 10s
-      timeout: 5s
+      test: ["CMD-SHELL", "celery -A app.workers.celery_app inspect ping -d heavy@$$(hostname)"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
+    depends_on:
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - tideo-net
+
+  worker-fast:
+    container_name: tideo_worker_fast
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    command: celery -A app.workers.celery_app worker -Q inspect,package,transcribe,cleanup --concurrency=4 --prefetch-multiplier=4 -n fast@%h --loglevel=info
+    volumes:
+      - .:/app
+      - data:/data
+    env_file:
+      - .env
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.workers.celery_app inspect ping -d fast@$$(hostname)"]
+      interval: 30s
+      timeout: 10s
       retries: 5
       start_period: 40s
     depends_on:
