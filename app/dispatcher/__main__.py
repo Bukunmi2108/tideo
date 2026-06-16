@@ -49,7 +49,7 @@ def run():
                 poison += 1
                 logger.error("poison pill p%s@%s: %s raw=%r",
                              msg.partition(), msg.offset(), e, msg.value())
-                consumer.commit(message=msg, asynchronous=False)   # skip + advance
+                consumer.commit(message=msg, asynchronous=False)
                 continue
 
             try:

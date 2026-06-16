@@ -186,6 +186,24 @@ services:
     networks:
       - tideo-net
 
+  audit:
+    container_name: tideo_audit
+    build: 
+      context: .
+      dockerfile: Dockerfile.worker
+    command: python -m app.dispatcher.audit
+    volumes:
+      - .:/app
+      - data:/data
+    env_file: 
+      - .env
+    depends_on:
+      kafka: 
+        condition: service_healthy
+      postgres: 
+        condition: service_healthy
+    networks: 
+      - tideo-net
 
 volumes:
   redis_data:

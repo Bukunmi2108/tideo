@@ -19,6 +19,10 @@ class Config(BaseSettings):
     rabbitmq_user: str = Field(default="guest", validation_alias="RABBITMQ_DEFAULT_USER")
     rabbitmq_password: str = Field(default="guest", validation_alias="RABBITMQ_DEFAULT_PASS")
 
+    postgres_user: str = "postgres"
+    postgres_password: str = "postgres"
+    postgres_db: str = "tideo"
+
     readiness_timeout_seconds: float = 2.0
     dispatcher_heartbeat_ttl: int = 30
     
@@ -66,6 +70,11 @@ class Config(BaseSettings):
     @property
     def kafka_bootstrap(self) -> str:
         return f"{self.kafka_host}:{self.kafka_port}"
+
+    @property
+    def postgres_dsn(self) -> str:
+        return (f"postgresql://{self.postgres_user}:{self.postgres_password}"
+                f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}")
 
 
 config = Config()  # type: ignore[call-arg]
