@@ -134,8 +134,8 @@ def test_rendition_rewrites_segment_refs(monkeypatch, tmp_path):
     c = _client(monkeypatch, tmp_path=tmp_path)
     body = c.get("/jobs/j1/playlist/720p").text
     # handler rewrites bare seg_XXXXX.ts -> ../../segments/{preset}/seg_XXXXX.ts
-    assert "../../segments/720p/seg_00000.ts" in body
-    assert body.count("seg_00000.ts") == body.count("../../segments/720p/seg_00000.ts")
+    assert "../segments/720p/seg_00000.ts" in body
+    assert body.count("seg_00000.ts") == body.count("../segments/720p/seg_00000.ts")
 
 
 # ---------- traversal probes ----------

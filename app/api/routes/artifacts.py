@@ -58,8 +58,9 @@ async def rendition_playlist(job_id: str, preset: str):
     job_dir = await _guard(job_id)
     src = _safe(job_dir, preset, "index.m3u8")
     content = src.read_text()
-    # rewrite seg_XXXXX.ts -> ../../segments/{preset}/seg_XXXXX.ts so they resolve correctly
-    content = re.sub(r"(seg_\d{5}\.ts)", rf"../../segments/{preset}/\1", content)
+    # rewrite seg_XXXXX.ts -> ../segments/{preset}/seg_XXXXX.ts
+    # from /jobs/{id}/playlist/{preset}, one ../ reaches /jobs/{id}/, then segments/{preset}/
+    content = re.sub(r"(seg_\d{5}\.ts)", rf"../segments/{preset}/\1", content)
     return Response(content, media_type=HLS_MIME, headers={"Cache-Control": NO_CACHE})
 
 

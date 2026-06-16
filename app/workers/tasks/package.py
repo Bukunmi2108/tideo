@@ -82,10 +82,11 @@ def package(results, job_id: str) -> dict:
     (job_dir / "manifest.json").write_text(json.dumps(manifest, indent=2))
 
     name = escape(cast(str, rec.get("source_filename", "")))  # filename is user input -> escape it
+    # "playlist" is relative to /jobs/{id}/player -> resolves to /jobs/{id}/playlist
     (job_dir / "embed.html").write_text(
-        f'<!-- {name} --><video id="v" controls></video>'
+        f'<!-- {name} --><video id="v" controls style="width:100%"></video>'
         '<script src="https://cdn.jsdelivr.net/npm/hls.js@1"></script>'
-        '<script>var h=new Hls();h.loadSource("master.m3u8");h.attachMedia(v);</script>'
+        '<script>var h=new Hls({debug:true});h.loadSource("playlist");h.attachMedia(document.getElementById("v"));</script>'
     )
 
     # terminal: done + results refs + job.completed. (Postgres jobs row: Phase 7 owns the schema.)
