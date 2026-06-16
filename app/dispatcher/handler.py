@@ -26,10 +26,11 @@ def process(env: dict, *, claim, enqueue) -> str:
     unit-testable. Returns the action taken; the caller commits the offset after it returns.
 
     claim(event_id) -> bool may raise RedisError; the caller turns that into fail-closed stall.
+    enqueue receives the whole envelope (it needs the payload's presets, not just the job_id).
     """
     if not is_dispatchable(env):
         return "skipped"
     if not claim(env["event_id"]):
         return "duplicate"
-    enqueue(env["job_id"])
+    enqueue(env)
     return "dispatched"

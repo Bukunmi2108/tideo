@@ -33,7 +33,7 @@ class Config(BaseSettings):
     output_ttl_days: int = 7
 
     x264_preset: str = "ultrafast"
-    dev_max_renditions: int | None = 2
+    dev_max_renditions: int = 4
     transcode_max_seconds: int = 1800
 
     stt_provider: Literal["local", "openai"] = "local"

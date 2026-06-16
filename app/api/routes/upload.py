@@ -42,6 +42,7 @@ async def upload(request: Request, filename: str | None = None):
         "status": "inspecting",
         "source_filename": filename,
         "content_hash": content_hash,
+        "source_path": str(dest),
         "created_at": now_iso(),
     })
 

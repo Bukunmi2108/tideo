@@ -68,14 +68,14 @@ def test_only_job_created_is_dispatchable():
 
 def test_process_dispatches_new_job_created():
     enq = []
-    action = process(_env(), claim=lambda _id: True, enqueue=lambda jid: enq.append(jid))
+    action = process(_env(), claim=lambda _id: True, enqueue=lambda e: enq.append(e["job_id"]))
     assert action == "dispatched"
     assert enq == ["j1"]
 
 
 def test_process_skips_duplicate_without_enqueue():
     enq = []
-    action = process(_env(), claim=lambda _id: False, enqueue=lambda jid: enq.append(jid))
+    action = process(_env(), claim=lambda _id: False, enqueue=lambda e: enq.append(e["job_id"]))
     assert action == "duplicate"
     assert enq == []                    # guard lost -> no work enqueued
 
@@ -86,7 +86,7 @@ def test_process_skips_non_dispatchable_without_claiming():
     action = process(
         _env(event_type="rendition.completed"),
         claim=lambda _id: claimed.append(_id) or True,
-        enqueue=lambda jid: enq.append(jid),
+        enqueue=lambda e: enq.append(e["job_id"]),  # not reached
     )
     assert action == "skipped"
     assert claimed == [] and enq == []  # not ours -> never even claim
@@ -99,4 +99,4 @@ def test_process_propagates_redis_error_for_fail_closed():
         raise RedisError("redis down")
 
     with pytest.raises(RedisError):
-        process(_env(), claim=boom, enqueue=lambda jid: None)
+        process(_env(), claim=boom, enqueue=lambda e: None)

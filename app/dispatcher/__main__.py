@@ -3,11 +3,11 @@ from confluent_kafka import Consumer, TopicPartition
 from redis.exceptions import RedisError
 from app.api.utils import now_iso
 from app.core.config import config
+from app.dispatcher.dispatch import build_and_fire_chord
 from app.dispatcher.guard import claim
 from app.dispatcher.handler import BadEvent, parse_event, process
 from app.events.topics import TOPIC
 from app.storage.state import get_sync_client
-from app.workers.celery_app import app as celery_app
 
 logger = logging.getLogger(__name__)
 _running = True
@@ -19,8 +19,8 @@ def _stop(*_):
 def _heartbeat():
     get_sync_client().set("dispatcher:heartbeat", now_iso(), ex=config.dispatcher_heartbeat_ttl)
 
-def _enqueue(job_id: str):
-    celery_app.send_task("app.workers.tasks.dispatch_stub.stub_job", args=[job_id])
+def _enqueue(env: dict):
+    build_and_fire_chord(env["job_id"], env["payload"]["presets"])
 
 def run():
     signal.signal(signal.SIGTERM, _stop)

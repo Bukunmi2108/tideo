@@ -1,8 +1,10 @@
 import json, subprocess, threading, time
 from collections import deque
+from typing import cast
 from celery.exceptions import SoftTimeLimitExceeded
+from app.domain.state import transition
 from app.events.producer import emit
-from app.events.topics import RENDITION_STARTED, RENDITION_COMPLETED, RENDITION_FAILED
+from app.events.topics import JOB_STARTED, RENDITION_STARTED, RENDITION_COMPLETED, RENDITION_FAILED
 from app.storage import paths
 from app.storage.state import get_sync_client
 from app.domain.ladder import PRESETS
@@ -16,6 +18,18 @@ import logging
 logger = logging.getLogger(__name__)
 
 ENCODE_FAILED, ENCODE_TIMEOUT = "ENCODE_FAILED", "ENCODE_TIMEOUT"
+
+def _mark_started(job_id):
+    """First rendition to begin flips queued->transcoding and emits job.started, exactly once.
+    SET NX picks the single winner; parallel siblings skip (no illegal re-transition / dup event)."""
+    r = get_sync_client()
+    if not r.set(f"started:{job_id}", "1", nx=True):
+        return
+    cur = cast(str, r.hget(f"job:{job_id}", "status")) or ""
+    nxt = transition(cur, "transcoding", job_id=job_id, caller="rendition")
+    if nxt:
+        r.hset(f"job:{job_id}", mapping={"status": nxt})
+        emit(JOB_STARTED, job_id, {})
 
 def _write_progress(job_id, preset, pct):
     """Fail-OPEN: a Redis hiccup must not kill the encode."""
@@ -47,6 +61,7 @@ def rendition(job_id: str, preset_name: str, src: str, meta: dict) -> dict:
     m = SourceMeta(**meta)
     preset = PRESETS[preset_name]
     emit(RENDITION_STARTED, job_id, {"preset": preset_name})
+    _mark_started(job_id)                                # first rendition flips job -> transcoding
     throttle = Throttle()
     final = paths.output_dir(job_id) / preset_name
     started = time.monotonic()
@@ -66,9 +81,11 @@ def rendition(job_id: str, preset_name: str, src: str, meta: dict) -> dict:
              {"preset": preset_name, "output_bytes": out_bytes, "encode_seconds": secs})
         return {"status": "ok", "preset": preset_name, "output_bytes": out_bytes}
     except SoftTimeLimitExceeded:
+        # emit the fact, then RAISE so the chord sees the failure (link_error -> fail_job, ADR-3).
+        # returning a failed dict would read as success and let the chord proceed.
         emit(RENDITION_FAILED, job_id, {"preset": preset_name, "error_code": ENCODE_TIMEOUT})
-        return {"status": "failed", "error": {"code": ENCODE_TIMEOUT}}
+        raise
     except RuntimeError as e:
         emit(RENDITION_FAILED, job_id, {"preset": preset_name, "error_code": ENCODE_FAILED})
         logger.error("rendition failed job=%s preset=%s: %s", job_id, preset_name, e)
-        return {"status": "failed", "error": {"code": ENCODE_FAILED, "message": str(e)}}
+        raise

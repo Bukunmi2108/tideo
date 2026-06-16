@@ -15,6 +15,7 @@ app = Celery(
         "app.workers.tasks.transcribe",
         "app.workers.tasks.cleanup",
         "app.workers.tasks.dispatch_stub",
+        "app.dispatcher.dispatch",                  # registers fail_job (the chord link_error handler)
     ],
 )
 
