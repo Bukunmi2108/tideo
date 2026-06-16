@@ -28,7 +28,7 @@ def build_master(variants: list[Variant]) -> str:
             f'#EXT-X-STREAM-INF:BANDWIDTH={v.bandwidth},'
             f'RESOLUTION={v.width}x{v.height},CODECS="{v.codecs}"'
         )
-        lines.append(f"{v.preset}/index.m3u8")
+        lines.append(f"playlist/{v.preset}")
     return "\n".join(lines) + "\n"
 
 def build_manifest(job_id: str, duration: float, variants: list[Variant],
