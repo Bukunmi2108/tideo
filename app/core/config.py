@@ -20,7 +20,8 @@ class Config(BaseSettings):
     rabbitmq_password: str = Field(default="guest", validation_alias="RABBITMQ_DEFAULT_PASS")
 
     readiness_timeout_seconds: float = 2.0
-
+    dispatcher_heartbeat_ttl: int = 30
+    
     data_dir: Path = Path("/data")
     max_upload_bytes: int = 4 * 1024**3
     max_source_seconds: int = 7200

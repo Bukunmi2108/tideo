@@ -165,6 +165,27 @@ services:
     networks:
       - tideo-net
 
+  dispatcher:
+    container_name: tideo_dispatcher
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    command: python -m app.dispatcher
+    volumes:
+      - .:/app
+      - data:/data
+    env_file:
+      - .env
+    depends_on:
+      kafka:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - tideo-net
+
 
 volumes:
   redis_data:
