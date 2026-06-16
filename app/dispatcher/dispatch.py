@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 
 RENDITION = "app.workers.tasks.rendition.rendition"
 PACKAGE = "app.workers.tasks.package.package"
+THUMBS = "app.workers.tasks.thumbs.thumbs"
 
 
 def build_and_fire_chord(job_id: str, presets: list[str]) -> None:
@@ -28,8 +29,9 @@ def build_and_fire_chord(job_id: str, presets: list[str]) -> None:
 
     err = fail_job.s(job_id)  # type: ignore[reportFunctionMemberAccess]  # celery Task .s(); stubs see a func
     header = group(
-        celery_app.signature(RENDITION, args=[job_id, p, src, meta]).set(link_error=err)
-        for p in presets
+        [celery_app.signature(RENDITION, args=[job_id, p, src, meta]).set(link_error=err)
+         for p in presets]
+        + [celery_app.signature(THUMBS, args=[job_id, src, meta]).set(link_error=err)]  # poster+sprite, in parallel
     )
     callback = celery_app.signature(PACKAGE, args=[job_id]).set(link_error=err)
     result = chord(header)(callback)

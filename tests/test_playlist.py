@@ -65,7 +65,7 @@ def test_manifest_schema():
     v = [Variant("720p", 2156000, 1280, 720, "avc1.64001f,mp4a.40.2")]
     m = build_manifest("j1", 30.0, v, web_remuxed=True, created_at="2026-06-16T00:00:00+00:00")
     assert set(m) == {"job_id", "duration", "renditions", "master", "web_mp4",
-                      "web_remuxed", "created_at"}
+                      "web_remuxed", "poster", "sprite", "created_at"}
     assert m["master"] == "master.m3u8" and m["web_mp4"] == "web.mp4"
     assert m["renditions"][0] == {
         "preset": "720p", "bandwidth": 2156000,

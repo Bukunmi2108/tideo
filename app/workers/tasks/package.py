@@ -68,7 +68,8 @@ def package(results, job_id: str) -> dict:
     duration = meta["duration"]
     job_dir = paths.output_dir(job_id)
 
-    variants = [_variant(str(job_dir), res["preset"], res["output_bytes"], duration) for res in results]
+    renditions = [res for res in results if "preset" in res]   # thumbs result has no "preset"
+    variants = [_variant(str(job_dir), res["preset"], res["output_bytes"], duration) for res in renditions]
     (job_dir / "master.m3u8").write_text(build_master(variants))
 
     top = _highest([v.preset for v in variants])

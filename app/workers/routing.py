@@ -8,6 +8,7 @@ task_routes = {
     "app.workers.tasks.inspect.*":    {"queue": "inspect"},
     "app.workers.tasks.transcode.*":  {"queue": "transcode"},
     "app.workers.tasks.rendition.*":  {"queue": "transcode"},   # heavy encode -> heavy lane
+    "app.workers.tasks.thumbs.*":     {"queue": "transcode"},   # decodes whole video -> heavy lane
     "app.workers.tasks.package.*":    {"queue": "package"},
     "app.workers.tasks.transcribe.*": {"queue": "transcribe"},
     "app.workers.tasks.cleanup.*":    {"queue": "cleanup"},

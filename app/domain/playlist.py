@@ -43,5 +43,7 @@ def build_manifest(job_id: str, duration: float, variants: list[Variant],
         "master": "master.m3u8",
         "web_mp4": "web.mp4",
         "web_remuxed": web_remuxed,
+        "poster": "poster.jpg",
+        "sprite": "sprite.jpg",
         "created_at": created_at,
     }
