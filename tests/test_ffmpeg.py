@@ -32,6 +32,14 @@ def test_golden_argv_720p(monkeypatch):
     ]
 
 
+def test_progress_flag_inserts_progress_args():
+    base = build_rendition_argv(meta(), PRESETS["720p"], "in.mp4", "/o")
+    withp = build_rendition_argv(meta(), PRESETS["720p"], "in.mp4", "/o", progress=True)
+    assert "-progress" not in base                          # default off keeps the golden argv
+    assert withp[withp.index("-progress") + 1] == "pipe:1"
+    assert "-nostats" in withp
+
+
 def test_no_audio_omits_all_audio_flags():
     argv = build_rendition_argv(meta(has_audio=False, audio_codec=None), PRESETS["720p"], "in.mp4", "/o")
     assert "-c:a" not in argv and "-b:a" not in argv and "-an" not in argv

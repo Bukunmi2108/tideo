@@ -2,7 +2,7 @@ from app.core.config import config
 from app.domain.ladder import Preset, gop_size
 from app.workers.ffprobe import SourceMeta
 
-def build_rendition_argv(meta: SourceMeta, preset: Preset, src: str, out_dir: str) -> list[str]:
+def build_rendition_argv(meta: SourceMeta, preset: Preset, src: str, out_dir: str, progress = False) -> list[str]:
     """Pure: (SourceMeta, Preset, paths) -> ffmpeg argv. No I/O. argv-list, never a shell string."""
     g = gop_size(meta.fps or 30.0)   # fps is set for any real video; 30 is a safe fallback
     vf = (f"scale=w={preset.width}:h={preset.height}"
@@ -16,6 +16,8 @@ def build_rendition_argv(meta: SourceMeta, preset: Preset, src: str, out_dir: st
     ]
     if meta.has_audio:
         argv += ["-c:a", "aac", "-b:a", preset.a_bitrate]   # omit ALL audio flags when no audio stream
+    if progress:
+        argv += ["-progress", "pipe:1", "-nostats"]
     argv += [
         "-hls_time", "4", "-hls_playlist_type", "vod", "-hls_flags", "independent_segments",
         "-hls_segment_filename", f"{out_dir}/seg_%05d.ts", f"{out_dir}/index.m3u8",
