@@ -13,6 +13,7 @@ app = Celery(
         "app.workers.tasks.package",
         "app.workers.tasks.transcribe",
         "app.workers.tasks.cleanup",
+        "app.workers.tasks.dispatch_stub",
     ],
 )
 

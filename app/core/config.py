@@ -61,6 +61,10 @@ class Config(BaseSettings):
     @property
     def celery_result_backend(self) -> str:
         return f"redis://{self.redis_host}:{self.redis_port}/0"
+    
+    @property
+    def kafka_bootstrap(self) -> str:
+        return f"{self.kafka_host}:{self.kafka_port}"
 
 
 config = Config()  # type: ignore[call-arg]
