@@ -36,6 +36,26 @@ def flush_producer(timeout: float = 5) -> None:
     if _producer is not None:
         _producer.flush(timeout)
 
+_emit_failures = 0
+
+def emit(event_type: str, job_id: str, payload: dict) -> bool:
+    """Fail-OPEN worker-event emit. Publishes a milestone; NEVER raises. Returns whether it buffered.
+
+    The event log observes work — it must never break it. A producer error is logged + counted, and the caller carries on.
+    """
+    global _emit_failures
+    try:
+        publish(Envelope(event_type, job_id, payload))
+        return True
+    except Exception:
+        _emit_failures += 1
+        logger.warning("emit dropped type=%s job=%s", event_type, job_id, exc_info=True)
+        return False
+
+def emit_failures() -> int:
+    """Count of dropped emits this process — Phase 8 /status surfaces it."""
+    return _emit_failures
+
 # --- the fork trap: each Celery child gets its own producer ---
 @worker_process_init.connect
 def _reset_after_fork(**_):
