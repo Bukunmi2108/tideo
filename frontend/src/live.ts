@@ -1,13 +1,14 @@
 // Transport module — wraps the WebSocket progress endpoint with a polling
 // fallback. All screens call watch() and never touch WebSocket directly.
 
-import { apiBase, type JobResponse } from "./api"
+import { apiBase, type JobResponse, type JobResults, type JobError } from "./api"
 
 // ---- Frame shapes (mirrors app/api/ws.py) ---------------------------------
 
 export interface SnapshotFrame {
   type: "snapshot"
   status: string
+  presets?: string[]
   progress: Record<string, number>
 }
 export interface ProgressFrame {
@@ -18,6 +19,8 @@ export interface ProgressFrame {
 export interface StateFrame {
   type: "state"
   status: string
+  results?: JobResults
+  error?: JobError
 }
 
 export interface WatchHandlers {
@@ -135,10 +138,10 @@ export function watch(jobId: string, handlers: WatchHandlers): () => void {
       const resp = await fetch(`${apiBase()}/jobs/${jobId}`)
       if (resp.ok) {
         const job = (await resp.json()) as JobResponse
-        handlers.onSnapshot({ type: "snapshot", status: job.status, progress: job.progress ?? {} })
+        handlers.onSnapshot({ type: "snapshot", status: job.status, presets: job.presets, progress: job.progress ?? {} })
         if (TERMINAL.has(job.status)) {
           terminal = true
-          handlers.onState({ type: "state", status: job.status })
+          handlers.onState({ type: "state", status: job.status, results: job.results, error: job.error })
           return
         }
       } else if (resp.status === 410) {

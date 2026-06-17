@@ -93,14 +93,15 @@ def test_web_safe_false_keeps_reason(client):
 
 
 @pytest.mark.parametrize("status", ["queued", "transcoding"])
-def test_in_progress_returns_progress_map(client, status):
+def test_in_progress_returns_progress_and_presets(client, status):
     c, fake = client
-    seed(fake, "j3", status=status)
+    seed(fake, "j3", status=status, presets=json.dumps(["720p", "480p"]))
     fake.hashes["job:j3"]["progress:720p"] = "100.0"
     fake.hashes["job:j3"]["progress:480p"] = "42.5"
     body = c.get("/jobs/j3").json()
     assert body["status"] == status
     assert body["progress"] == {"720p": 100.0, "480p": 42.5}
+    assert body["presets"] == ["720p", "480p"]  # the bar set, known before any progress
 
 
 def test_in_progress_with_no_renditions_yet_is_empty_map(client):
@@ -108,6 +109,7 @@ def test_in_progress_with_no_renditions_yet_is_empty_map(client):
     seed(fake, "j3b", status="queued")
     body = c.get("/jobs/j3b").json()
     assert body["progress"] == {}
+    assert body["presets"] == []
 
 
 def test_done_returns_results_urls(client):

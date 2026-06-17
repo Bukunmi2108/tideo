@@ -101,4 +101,6 @@ def package(results, job_id: str) -> dict:
             "renditions": len(variants),
             "output_bytes_total": sum(res.get("output_bytes", 0) for res in results),
         })
+        # poke the progress channel so a live WS relay wakes and detects the terminal status
+        r.publish(f"progress:{job_id}", json.dumps({"event": "terminal"}))
     return {"status": nxt, "job_id": job_id, "master": "master.m3u8"}

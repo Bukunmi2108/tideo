@@ -12,6 +12,7 @@ export function humanBytes(b: number): string {
 }
 
 export function humanDuration(seconds: number): string {
+  if (!Number.isFinite(seconds)) return "0:00" // guards NaN duration before metadata loads
   const s = Math.max(0, Math.round(seconds))
   const h = Math.floor(s / 3600)
   const m = Math.floor((s % 3600) / 60)

@@ -87,6 +87,14 @@ def test_snapshot_content(monkeypatch):
     assert frame["progress"] == {"720p": 41.2, "480p": 23.7}
 
 
+def test_snapshot_includes_presets(monkeypatch):
+    c, _ = _setup(monkeypatch, {"status": "transcoding", "presets": json.dumps(["720p", "480p"])})
+    with c.websocket_connect("/jobs/j1/progress") as ws:
+        frame = ws.receive_json()
+    assert frame["type"] == "snapshot"
+    assert frame["presets"] == ["720p", "480p"]
+
+
 def test_unknown_job_error_frame(monkeypatch):
     c, _ = _setup(monkeypatch, {})
     with c.websocket_connect("/jobs/j1/progress") as ws:
@@ -165,6 +173,23 @@ def test_terminal_detection_after_progress(monkeypatch):
     assert f3["type"] == "state"
     assert f3["status"] == "done"
     assert "results" in f3
+
+
+def test_terminal_poke_without_percent_triggers_state(monkeypatch):
+    # the packaging callback pokes the channel with a percent-less message when it
+    # flips the job to done; the relay must detect terminal, not forward a progress frame
+    c, _ = _setup(
+        monkeypatch,
+        {"status": "transcoding"},
+        ps_messages=[{"type": "message", "data": json.dumps({"event": "terminal"})}],
+        status_seq=["done"],
+    )
+    with c.websocket_connect("/jobs/j1/progress") as ws:
+        f1 = ws.receive_json()  # snapshot
+        f2 = ws.receive_json()  # state — no progress frame in between
+    assert f1["type"] == "snapshot"
+    assert f2["type"] == "state"
+    assert f2["status"] == "done"
 
 
 def test_subscription_cleanup_on_terminal(monkeypatch):

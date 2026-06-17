@@ -7,6 +7,10 @@ class FakeRedis:
     def __init__(self, hash_):
         self.hashes = {"job:j1": dict(hash_)}
         self.kv = {}
+        self.published = []
+
+    def publish(self, channel, message):
+        self.published.append((channel, message))
 
     def hgetall(self, k):
         return dict(self.hashes.get(k, {}))
@@ -73,6 +77,7 @@ def test_fail_job_marks_failed_and_revokes_siblings(monkeypatch):
     assert fake.hashes["job:j1"]["status"] == "failed"
     assert emitted == [("job.failed", "j1")]
     assert revoked == ["r0", "r1"]                           # siblings revoked
+    assert fake.published == [("progress:j1", json.dumps({"event": "terminal"}))]  # wakes live WS
 
 
 def test_fail_job_on_already_terminal_is_noop(monkeypatch):

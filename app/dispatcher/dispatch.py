@@ -55,5 +55,6 @@ def fail_job(request, exc, traceback, job_id: str):
             "status": nxt, "error_code": "ENCODE_FAILED", "error_stage": "transcode",
         })
         emit(JOB_FAILED, job_id, {"error_code": "ENCODE_FAILED", "stage": "transcode"})
+        r.publish(f"progress:{job_id}", json.dumps({"event": "terminal"}))  # wake a live WS relay
     for tid in json.loads(r.hget(f"job:{job_id}", "rendition_ids") or "[]"):
         celery_app.control.revoke(tid, terminate=True)        # best-effort sibling revocation

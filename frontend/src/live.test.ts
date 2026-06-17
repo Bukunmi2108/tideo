@@ -94,6 +94,22 @@ describe("watch() — WebSocket path", () => {
     teardown()
   })
 
+  it("passes results through on a terminal done frame", () => {
+    const states: StateFrame[] = []
+    const teardown = watch("j1", {
+      onSnapshot: () => {},
+      onProgress: () => {},
+      onState:    (f) => states.push(f),
+      onMode:     () => {},
+    })
+
+    MockWS.last!.open()
+    MockWS.last!.receive({ type: "state", status: "done", results: { playlist: "/jobs/j1/playlist" } })
+
+    expect(states[0].results?.playlist).toBe("/jobs/j1/playlist")
+    teardown()
+  })
+
   it("ignores ping frames", () => {
     const snapshots: SnapshotFrame[] = []
     const teardown = watch("j1", {
@@ -168,6 +184,32 @@ describe("watch() — fallback to polling", () => {
 
     expect(snapshots.length).toBeGreaterThan(0)
     expect(snapshots[0].status).toBe("transcoding")
+  })
+
+  it("carries presets in the snapshot and results on the terminal frame via polling", async () => {
+    const snapshots: SnapshotFrame[] = []
+    const states: StateFrame[] = []
+    let n = 0
+    vi.stubGlobal("fetch", async () => {
+      n++
+      return n === 1
+        ? { ok: true, status: 200, json: async () => ({ job_id: "j1", status: "transcoding", presets: ["720p", "480p"], progress: { "720p": 10 } }) }
+        : { ok: true, status: 200, json: async () => ({ job_id: "j1", status: "done", progress: {}, results: { playlist: "/jobs/j1/playlist" } }) }
+    })
+
+    const teardown = watch("j1", {
+      onSnapshot: (f) => snapshots.push(f),
+      onProgress: () => {},
+      onState:    (f) => states.push(f),
+      onMode:     () => {},
+    })
+
+    MockWS.last!.die()
+    await vi.runAllTimersAsync()
+    teardown()
+
+    expect(snapshots.some((s) => s.presets?.includes("720p"))).toBe(true)
+    expect(states[0].results?.playlist).toBe("/jobs/j1/playlist")
   })
 
   it("stops polling after terminal status in poll response", async () => {

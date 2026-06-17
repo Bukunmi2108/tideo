@@ -35,6 +35,7 @@ async def get_job(job_id: str):
         resp["web_safe_reason"] = rec.get("web_safe_reason") or None
     elif status in ("queued", "transcoding"):
         resp["progress"] = progress_map(rec)
+        resp["presets"] = json.loads(rec["presets"]) if rec.get("presets") else []
     elif status == "done":
         resp["results"] = results_view(job_id, rec)
     elif status == "failed":

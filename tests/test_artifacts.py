@@ -62,6 +62,31 @@ def test_guard_rejects_non_done(monkeypatch, status, expected):
     assert c.get("/jobs/j1/playlist").status_code == expected
 
 
+# ---------- poster/sprite serve before done (written by the thumbs task mid-chord) ----------
+
+@pytest.mark.parametrize("path", ["poster", "sprite"])
+def test_thumb_served_during_transcode(monkeypatch, tmp_path, path):
+    _seed_job(tmp_path)
+    c = _client(monkeypatch, status="transcoding", tmp_path=tmp_path)
+    r = c.get(f"/jobs/j1/{path}")
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("image/jpeg")
+
+
+@pytest.mark.parametrize("path", ["poster", "sprite"])
+def test_thumb_404_before_generated(monkeypatch, tmp_path, path):
+    # transcoding, but the thumbs task hasn't written the file yet
+    c = _client(monkeypatch, status="transcoding", tmp_path=tmp_path)
+    assert c.get(f"/jobs/j1/{path}").status_code == 404
+
+
+@pytest.mark.parametrize("path", ["poster", "sprite"])
+def test_thumb_410_when_expired(monkeypatch, tmp_path, path):
+    _seed_job(tmp_path)
+    c = _client(monkeypatch, status="expired", tmp_path=tmp_path)
+    assert c.get(f"/jobs/j1/{path}").status_code == 410
+
+
 # ---------- MIME + status for every endpoint ----------
 
 def test_master_playlist_mime(monkeypatch, tmp_path):

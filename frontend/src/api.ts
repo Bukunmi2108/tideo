@@ -56,6 +56,7 @@ export interface JobResponse {
   recommended_presets?: string[]
   web_safe?: boolean
   web_safe_reason?: string | null
+  presets?: string[]
   progress?: Record<string, number>
   results?: JobResults
   error?: JobError

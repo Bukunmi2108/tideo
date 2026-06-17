@@ -14,6 +14,7 @@ class JobResponse(BaseModel):
     recommended_presets: list[str] | None = None
     web_safe: bool | None = None
     web_safe_reason: str | None = None
+    presets: list[str] | None = None
     progress: dict | None = None
     results: dict | None = None
     error: dict | None = None

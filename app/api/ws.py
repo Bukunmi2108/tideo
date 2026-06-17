@@ -54,6 +54,7 @@ async def progress_ws(ws: WebSocket, job_id: str):
         await ws.send_json({
             "type": "snapshot",
             "status": status,
+            "presets": json.loads(rec["presets"]) if rec.get("presets") else [],
             "progress": progress_map(rec),
         })
 
@@ -70,7 +71,8 @@ async def progress_ws(ws: WebSocket, job_id: str):
                 if raw["type"] != "message":
                     continue
                 frame = json.loads(raw["data"])
-                await ws.send_json({"type": "progress", **frame})
+                if "percent" in frame:  # progress frame; terminal pokes carry no percent
+                    await ws.send_json({"type": "progress", **frame})
 
                 cur = cast(str | None, await r.hget(f"job:{job_id}", "status"))
                 if cur in TERMINAL:

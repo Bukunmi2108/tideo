@@ -36,6 +36,17 @@ async def _guard(job_id: str) -> Path:
     return paths.output_dir(job_id)
 
 
+async def _guard_thumb(job_id: str) -> Path:
+    """Looser guard for poster/sprite: the thumbs task writes these mid-chord,
+    before `done`. Serve them as soon as they exist; 404 until then, 410 if expired."""
+    status = cast(str | None, await get_client().hget(f"job:{job_id}", "status"))
+    if status is None:
+        raise ApiError(404, "NOT_FOUND", "job not found", job_id)
+    if status == "expired":
+        raise ApiError(410, "EXPIRED", "job artifacts have expired", job_id)
+    return paths.output_dir(job_id)
+
+
 def _safe(job_dir: Path, *parts: str) -> Path:
     """Resolve path and assert it's under job_dir — second layer of traversal defense."""
     p = Path(job_dir, *parts).resolve()
@@ -85,16 +96,20 @@ async def web_mp4(job_id: str):
 
 @router.get("/jobs/{job_id}/poster")
 async def poster(job_id: str):
-    job_dir = await _guard(job_id)
-    return FileResponse(str(job_dir / "poster.jpg"), media_type=JPEG_MIME,
-                        headers={"Cache-Control": SHORT})
+    job_dir = await _guard_thumb(job_id)
+    path = job_dir / "poster.jpg"
+    if not path.exists():
+        raise ApiError(404, "NOT_READY", "poster not yet generated", job_id)
+    return FileResponse(str(path), media_type=JPEG_MIME, headers={"Cache-Control": SHORT})
 
 
 @router.get("/jobs/{job_id}/sprite")
 async def sprite(job_id: str):
-    job_dir = await _guard(job_id)
-    return FileResponse(str(job_dir / "sprite.jpg"), media_type=JPEG_MIME,
-                        headers={"Cache-Control": SHORT})
+    job_dir = await _guard_thumb(job_id)
+    path = job_dir / "sprite.jpg"
+    if not path.exists():
+        raise ApiError(404, "NOT_READY", "sprite not yet generated", job_id)
+    return FileResponse(str(path), media_type=JPEG_MIME, headers={"Cache-Control": SHORT})
 
 
 @router.get("/jobs/{job_id}/player")
