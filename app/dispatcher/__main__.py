@@ -1,10 +1,11 @@
 import logging, signal, time
 from confluent_kafka import Consumer, TopicPartition
+from kombu.exceptions import OperationalError
 from redis.exceptions import RedisError
 from app.api.utils import now_iso
 from app.core.config import config
 from app.dispatcher.dispatch import build_and_fire_chord
-from app.dispatcher.guard import claim
+from app.dispatcher.guard import claim, release
 from app.dispatcher.handler import BadEvent, parse_event, process
 from app.events.topics import TOPIC
 from app.storage.state import get_sync_client
@@ -53,13 +54,15 @@ def run():
                 continue
 
             try:
-                action = process(env, claim=claim, enqueue=_enqueue)
-            except RedisError:
-                logger.error("redis unavailable — stalling on p%s@%s",
-                             msg.partition(), msg.offset())
+                action = process(env, claim=claim, enqueue=_enqueue, release=release)
+            except (RedisError, OperationalError) as e:
+                # infra down (redis claim, or broker enqueue). The claim (if taken) was released,
+                # so the re-consumed event retries cleanly. Fail CLOSED: don't commit, re-poll same event.
+                logger.error("infra unavailable (%s) — stalling on p%s@%s",
+                             type(e).__name__, msg.partition(), msg.offset())
                 # a polled non-error message always has topic/partition/offset; stubs say Optional
                 consumer.seek(TopicPartition(msg.topic(), msg.partition(), msg.offset()))  # type: ignore[arg-type]
-                time.sleep(2)                                       # fail CLOSED: retry same event
+                time.sleep(2)
                 continue
 
             consumer.commit(message=msg, asynchronous=False)

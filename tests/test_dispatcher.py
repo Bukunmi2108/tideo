@@ -21,6 +21,9 @@ class FakeRedis:
         self.kv[k] = v
         return True
 
+    def delete(self, k):
+        self.kv.pop(k, None)
+
 
 def test_claim_first_wins_second_loses(monkeypatch):
     import app.dispatcher.guard as g
@@ -29,6 +32,17 @@ def test_claim_first_wins_second_loses(monkeypatch):
     assert claim("evt-1") is True       # first sighting -> dispatch
     assert claim("evt-1") is False      # redelivery -> skip
     assert claim("evt-2") is True       # different event -> independent
+
+
+def test_release_makes_event_claimable_again(monkeypatch):
+    import app.dispatcher.guard as g
+    from app.dispatcher.guard import release
+    fake = FakeRedis()
+    monkeypatch.setattr(g, "get_sync_client", lambda: fake)
+    assert claim("evt-1") is True
+    assert claim("evt-1") is False      # already claimed
+    release("evt-1")                    # enqueue failed -> undo the claim
+    assert claim("evt-1") is True       # retryable again, not burned
 
 
 # ---------- parse_event ----------
@@ -100,3 +114,16 @@ def test_process_propagates_redis_error_for_fail_closed():
 
     with pytest.raises(RedisError):
         process(_env(), claim=boom, enqueue=lambda e: None)
+
+
+def test_process_releases_claim_when_enqueue_fails():
+    """Broker-down enqueue must not burn the event: release the claim, then re-raise to stall."""
+    released = []
+
+    def enqueue_boom(_e):
+        raise RuntimeError("broker unreachable")
+
+    with pytest.raises(RuntimeError):
+        process(_env(), claim=lambda _id: True, enqueue=enqueue_boom,
+                release=lambda _id: released.append(_id))
+    assert released == ["e1"]   # claim undone -> re-consume retries instead of skipping as duplicate

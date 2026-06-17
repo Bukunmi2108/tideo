@@ -1,6 +1,7 @@
 services:
   api:
     container_name: tideo_api
+    restart: unless-stopped
     build:
       context: .
       dockerfile: Dockerfile.api
@@ -117,6 +118,7 @@ services:
   
   worker-heavy:
     container_name: tideo_worker_heavy
+    restart: unless-stopped
     build:
       context: .
       dockerfile: Dockerfile.worker
@@ -142,6 +144,7 @@ services:
 
   worker-fast:
     container_name: tideo_worker_fast
+    restart: unless-stopped
     build:
       context: .
       dockerfile: Dockerfile.worker
@@ -167,6 +170,7 @@ services:
 
   dispatcher:
     container_name: tideo_dispatcher
+    restart: unless-stopped
     build:
       context: .
       dockerfile: Dockerfile.worker
@@ -188,6 +192,7 @@ services:
 
   audit:
     container_name: tideo_audit
+    restart: unless-stopped
     build: 
       context: .
       dockerfile: Dockerfile.worker
