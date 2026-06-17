@@ -32,11 +32,9 @@ let commitError: string | null = null
 let presets: string[] = []
 let progress: Record<string, number> = {}
 let mode: "live" | "polling" = "live"
-let posterReady = false
 
 // async drivers (one set at a time)
 let pollTimer: ReturnType<typeof setTimeout> | null = null
-let thumbTimer: ReturnType<typeof setInterval> | null = null
 let unwatch: (() => void) | null = null
 let player: PlayerHandle | null = null
 let gen = 0 // invalidates in-flight load()s when the view is superseded
@@ -49,7 +47,6 @@ function cancelPoll(): void {
   if (pollTimer) clearTimeout(pollTimer)
   pollTimer = null
   stopWatch()
-  stopThumbs()
   gen++
 }
 
@@ -120,10 +117,8 @@ function startProgress(job: JobResponse): void {
   presets = job.presets ?? []
   progress = job.progress ?? {}
   mode = "live"
-  posterReady = false
   setView({ tag: "progress" })
   startWatch()
-  startThumbs()
 }
 
 function startWatch(): void {
@@ -154,7 +149,6 @@ function stopWatch(): void {
 
 function onTerminal(f: StateFrame): void {
   stopWatch()
-  stopThumbs()
   switch (f.status) {
     case "done":
       if (f.results) setView({ tag: "done", results: f.results })
@@ -172,33 +166,6 @@ function onTerminal(f: StateFrame): void {
     default:
       void load()
   }
-}
-
-// Poster/sprite are written by the thumbs task mid-chord — poll until ready.
-function startThumbs(): void {
-  stopThumbs()
-  void tryThumb()
-  thumbTimer = setInterval(() => void tryThumb(), 2500)
-}
-
-function stopThumbs(): void {
-  if (thumbTimer) clearInterval(thumbTimer)
-  thumbTimer = null
-}
-
-// HEAD probe (not <img>) so a not-yet-ready 404 doesn't log a console error every tick.
-async function tryThumb(): Promise<void> {
-  if (posterReady || !jobId) return
-  const url = `${apiBase()}/jobs/${jobId}/poster`
-  try {
-    if (!(await fetch(url, { method: "HEAD" })).ok) return
-  } catch {
-    return
-  }
-  posterReady = true
-  stopThumbs()
-  const row = appEl.querySelector(".thumb-row")
-  if (row) row.innerHTML = `<img class="thumb-poster" src="${url}" alt="preview" />`
 }
 
 // ---- Commit ---------------------------------------------------------------
@@ -354,20 +321,25 @@ function estimateText(): string {
 }
 
 function cardProgress(): string {
-  const total = presets.length
-  const done = presets.filter((p) => (progress[p] ?? 0) >= 100).length
+  const allDone = presets.length > 0 && presets.every((p) => (progress[p] ?? 0) >= 100)
   return `
     <div class="inspect-card progress-card">
       <div class="inspect-head">
-        <h1 class="inspect-title">Transcoding…</h1>
+        <h1 class="inspect-title">${allDone ? "Finalizing…" : "Transcoding…"}</h1>
         ${mode === "polling" ? `<span class="mode-pill">live updates paused — retrying</span>` : ""}
       </div>
       <div class="bars">${presets.map(progressBar).join("") || '<p class="term-msg">Queued…</p>'}</div>
-      <p class="progress-status" id="progress-status">${done} of ${total} renditions complete</p>
-      <div class="thumb-row">${posterReady ? `<img class="thumb-poster" src="${apiBase()}/jobs/${esc(jobId ?? "")}/poster" alt="preview" />` : ""}</div>
+      <p class="progress-status" id="progress-status">${statusLine()}</p>
       <button class="btn btn-ghost" disabled title="Cancellation arrives in Phase 6">Cancel</button>
     </div>
   `
+}
+
+function statusLine(): string {
+  const total = presets.length
+  const done = presets.filter((p) => (progress[p] ?? 0) >= 100).length
+  if (total > 0 && done === total) return "Packaging and generating thumbnails…"
+  return `${done} of ${total} renditions complete`
 }
 
 function progressBar(preset: string): string {
@@ -389,9 +361,11 @@ function updateBars(): void {
     row.querySelector<HTMLElement>(".progress-bar-fill")!.style.width = `${pct}%`
     row.querySelector<HTMLElement>(".bar-pct")!.textContent = `${pct}%`
   }
-  const done = presets.filter((p) => (progress[p] ?? 0) >= 100).length
   const status = document.getElementById("progress-status")
-  if (status) status.textContent = `${done} of ${presets.length} renditions complete`
+  if (status) status.textContent = statusLine()
+  const allDone = presets.length > 0 && presets.every((p) => (progress[p] ?? 0) >= 100)
+  const title = appEl.querySelector(".progress-card .inspect-title")
+  if (title && allDone) title.textContent = "Finalizing…"
 }
 
 function cardDone(results: JobResults): string {
@@ -506,9 +480,7 @@ export function mount(root: HTMLElement, query: URLSearchParams): () => void {
   presets = []
   progress = {}
   mode = "live"
-  posterReady = false
   pollTimer = null
-  thumbTimer = null
   unwatch = null
   player = null
   errorAttempts = 0
@@ -517,7 +489,7 @@ export function mount(root: HTMLElement, query: URLSearchParams): () => void {
   void load()
 
   return () => {
-    cancelPoll() // clears pollTimer, stops watch + thumbs, bumps gen
+    cancelPoll()
     if (player) { player.destroy(); player = null }
   }
 }

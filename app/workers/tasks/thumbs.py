@@ -1,10 +1,8 @@
 import math
 from dataclasses import dataclass
 import json, subprocess
+from pathlib import Path
 from app.storage import paths
-from app.workers.base import TranscodeTask
-from app.workers.celery_app import app
-from app.workers.ffprobe import SourceMeta
 
 
 @dataclass(frozen=True)
@@ -37,15 +35,15 @@ def _verify_image(path: str) -> None:
     if not streams or int(streams[0].get("width", 0)) == 0:
         raise RuntimeError(f"invalid image: {path}")
 
-@app.task(base=TranscodeTask)
-def thumbs(job_id: str, src: str, meta: dict) -> dict:
-    m = SourceMeta(**meta)
-    out = paths.output_dir(job_id)
-    with paths.atomic_path(out / "poster.jpg") as tmp:
-        subprocess.run(_poster_argv(src, m.duration, str(tmp)), check=True)
+def write_poster(out_dir: Path, src: str, duration: float) -> None:
+    with paths.atomic_path(out_dir / "poster.jpg") as tmp:
+        subprocess.run(_poster_argv(src, duration, str(tmp)), check=True)
         _verify_image(str(tmp))
-    plan = sprite_plan(m.duration, m.fps or 30.0)
-    with paths.atomic_path(out / "sprite.jpg") as tmp:
+
+
+def write_sprite(out_dir: Path, src: str, duration: float, fps: float) -> int:
+    plan = sprite_plan(duration, fps or 30.0)
+    with paths.atomic_path(out_dir / "sprite.jpg") as tmp:
         subprocess.run(_sprite_argv(src, plan, str(tmp)), check=True)
         _verify_image(str(tmp))
-    return {"poster": "poster.jpg", "sprite": "sprite.jpg", "tiles": plan.tiles}
+    return plan.tiles

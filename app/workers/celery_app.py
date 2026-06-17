@@ -11,7 +11,6 @@ app = Celery(
         "app.workers.tasks.inspect",
         "app.workers.tasks.transcode",
         "app.workers.tasks.rendition",
-        "app.workers.tasks.thumbs",
         "app.workers.tasks.package",
         "app.workers.tasks.transcribe",
         "app.workers.tasks.cleanup",

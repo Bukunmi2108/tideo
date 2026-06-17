@@ -57,7 +57,7 @@ def test_chord_caps_to_dev_max_renditions(monkeypatch):
                         lambda *a, **k: type("S", (), {"set": lambda self, **kw: self})())
 
     dispatch.build_and_fire_chord("j1", ["1080p", "720p", "480p", "360p"])  # 4 requested
-    assert captured["header_len"] == 3                       # 2 renditions (capped) + 1 thumbs task
+    assert captured["header_len"] == 2                       # renditions only, capped to dev_max
     assert fake.hashes["job:j1"]["chord_callback_id"] == "cb-1"
     assert json.loads(fake.hashes["job:j1"]["rendition_ids"]) == ["r0", "r1"]
 

@@ -13,6 +13,7 @@ from app.storage import paths
 from app.storage.state import get_sync_client
 from app.workers.base import PackageTask
 from app.workers.celery_app import app
+from app.workers.tasks.thumbs import write_poster, write_sprite
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +41,11 @@ def _variant(job_dir: str, preset: str, output_bytes: int, duration: float) -> V
 def _highest(presets: list[str]) -> str:
     order = list(PRESETS)                                      # catalog is ordered highest-first
     return min(presets, key=order.index)
+
+
+def _lowest(presets: list[str]) -> str:
+    order = list(PRESETS)
+    return max(presets, key=order.index)
 
 
 def _web_mp4(src: str, out: str, *, web_safe: bool, top: str) -> bool:
@@ -76,6 +82,10 @@ def package(results, job_id: str) -> dict:
     remuxed = _web_mp4(cast(str, rec["source_path"]), str(job_dir / "web.mp4"),
                        web_safe=(rec.get("web_safe") == "true"), top=top)
     logger.info("web.mp4 %s job=%s", "remuxed (-c copy)" if remuxed else "re-encoded", job_id)
+
+    low = _lowest([v.preset for v in variants])
+    write_poster(job_dir, f"{job_dir}/{top}/index.m3u8", duration)
+    write_sprite(job_dir, f"{job_dir}/{low}/index.m3u8", duration, meta.get("fps") or 30.0)
 
     manifest = build_manifest(job_id, duration, variants,
                               web_remuxed=remuxed, created_at=cast(str, rec.get("created_at")))
