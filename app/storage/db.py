@@ -1,5 +1,4 @@
 import json
-import logging
 from datetime import datetime, timezone
 
 import psycopg2
@@ -7,8 +6,9 @@ from psycopg2 import errors as pg_errors
 from psycopg2.extras import Json, RealDictCursor
 
 from app.core.config import config
+from app.core.logging import get_logger
 
-logger = logging.getLogger(__name__)
+log = get_logger()
 
 _TRANSIENT = (psycopg2.OperationalError, psycopg2.InterfaceError)
 
@@ -146,7 +146,7 @@ def init_schema() -> None:
     try:
         conn = psycopg2.connect(config.postgres_dsn)
     except _TRANSIENT:
-        logger.error("init_schema: postgres unavailable at startup — deferring to first write")
+        log.error("schema_init_deferred", reason="postgres_unavailable")
         return
     try:
         ensure_schema(conn)
@@ -242,12 +242,11 @@ def persist_terminal(job_id: str, rec: dict, *, results=None, expired_at: str | 
             ensure_schema(conn)
             write_terminal(conn, params, rparams)
     except _TRANSIENT:
-        logger.error("persist_terminal: postgres unavailable job=%s status=%s — row not written",
-                     job_id, params["status"])
+        log.error("persist_terminal_skipped", status=params["status"], reason="postgres_unavailable")
     except psycopg2.Error:
         if conn is not None:
             conn.rollback()
-        logger.error("persist_terminal: write failed (likely a bug) job=%s status=%s — row not written", job_id, params["status"], exc_info=True)
+        log.error("persist_terminal_failed", status=params["status"], exc_info=True)
     finally:
         if conn is not None:
             conn.close()

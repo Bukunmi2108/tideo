@@ -1,11 +1,10 @@
 import json
-import logging
 import shutil
 import subprocess
 from html import escape
 from typing import cast
 from app.core.config import config
-from app.core.logging import bind_job
+from app.core.logging import bind_job, get_logger
 from app.domain.ladder import PRESETS
 from app.domain.playlist import Variant, avc1_codec, bandwidth, build_manifest, build_master
 from app.domain.state import transition
@@ -18,7 +17,7 @@ from app.workers.base import PackageTask
 from app.workers.celery_app import app
 from app.workers.tasks.thumbs import write_poster, write_sprite
 
-logger = logging.getLogger(__name__)
+log = get_logger()
 
 
 @app.task(base=PackageTask)
@@ -87,7 +86,7 @@ def package(results, job_id: str) -> dict:
     top = _highest([v.preset for v in variants])
     remuxed = _web_mp4(cast(str, rec["source_path"]), str(job_dir / "web.mp4"),
                        web_safe=(rec.get("web_safe") == "true"), top=top)
-    logger.info("web.mp4 %s job=%s", "remuxed (-c copy)" if remuxed else "re-encoded", job_id)
+    log.info("web_mp4_built", mode="remux" if remuxed else "reencode")
 
     low = _lowest([v.preset for v in variants])
     write_poster(job_dir, f"{job_dir}/{top}/index.m3u8", duration)
@@ -120,7 +119,7 @@ def package(results, job_id: str) -> dict:
         except FileNotFoundError:
             pass
         except OSError:
-            logger.warning("source reclaim failed job=%s (orphaned)", job_id)
+            log.warning("source_reclaim_failed", scope="package")
         emit(JOB_COMPLETED, job_id, {
             "renditions": len(variants),
             "output_bytes_total": sum(res.get("output_bytes", 0) for res in results),

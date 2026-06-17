@@ -1,8 +1,8 @@
-import logging
 import shutil
 from datetime import datetime, timedelta, timezone
 
 from app.core.config import config
+from app.core.logging import get_logger
 from app.events.producer import emit
 from app.events.topics import JOB_EXPIRED
 from app.storage import db
@@ -10,7 +10,7 @@ from app.storage.state import get_sync_client
 from app.workers.base import CleanupTask
 from app.workers.celery_app import app
 
-logger = logging.getLogger(__name__)
+log = get_logger()
 
 
 def _expire_outputs(now: datetime) -> tuple[int, int]:
@@ -35,9 +35,9 @@ def _expire_outputs(now: datetime) -> tuple[int, int]:
                 expired += 1
         except Exception:
             failed += 1
-            logger.exception("expire failed job=%s — left eligible for retry", job_id)
+            log.exception("expire_failed", job_id=job_id)
     if failed:
-        logger.error("expiry sweep: %d job(s) could not be reclaimed this run", failed)
+        log.error("expiry_reclaim_incomplete", failed=failed)
     return expired, failed
 
 
@@ -53,7 +53,7 @@ def _sweep_stale_sources(now: datetime) -> int:
             shutil.rmtree(src_dir)
             removed += 1
         except OSError:
-            logger.warning("source reclaim failed job=%s (still on disk)", row["job_id"])
+            log.warning("source_reclaim_failed", job_id=row["job_id"], scope="sweep")
     return removed
 
 
@@ -80,7 +80,7 @@ def _sweep_temp_dirs(now: datetime) -> int:
             except FileNotFoundError:
                 continue                                 # vanished mid-iteration (an atomic rename) — benign
             except OSError:
-                logger.warning("temp sweep: could not remove %s", child)
+                log.warning("temp_sweep_failed", path=str(child))
     return removed
 
 
@@ -92,5 +92,5 @@ def sweep() -> dict:
     expired, failed = _expire_outputs(now)
     result = {"expired": expired, "failed": failed,
               "sources": _sweep_stale_sources(now), "temps": _sweep_temp_dirs(now)}
-    logger.info("cleanup sweep %s", result)
+    log.info("cleanup_sweep_completed", **result)
     return result

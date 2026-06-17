@@ -1,10 +1,10 @@
-import logging
 import shutil
 import time
 
 from app.core.config import config
+from app.core.logging import get_logger
 
-logger = logging.getLogger(__name__)
+log = get_logger()
 
 _CACHE_TTL = 5.0
 _checked_at = 0.0
@@ -26,7 +26,7 @@ def under_pressure() -> bool:
         try:
             _pct = usage_pct()
         except OSError:
-            logger.warning("disk usage probe failed — not shedding")
+            log.warning("disk_probe_failed")
             _pct = 0.0
         _checked_at = now
     return _pct >= config.storage_watermark_pct

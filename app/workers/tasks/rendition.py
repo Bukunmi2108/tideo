@@ -3,7 +3,7 @@ from collections import deque
 from datetime import datetime, timezone
 from typing import NoReturn, cast
 from celery.exceptions import Ignore, SoftTimeLimitExceeded
-from app.core.logging import bind_job
+from app.core.logging import bind_job, get_logger
 from app.domain.errors import TideoError, classify, make_error, ENCODE_TIMEOUT, TRANSCODE
 from app.domain.state import transition
 from app.events.producer import emit
@@ -17,9 +17,8 @@ from app.workers.progress import Throttle, parse_progress_blocks, percent
 from app.workers.base import TranscodeTask
 from app.workers.retry import backoff_seconds, max_retries_for
 from app.workers.celery_app import app
-import logging
 
-logger = logging.getLogger(__name__)
+log = get_logger()
 
 
 class Cancelled(Exception):
@@ -56,7 +55,7 @@ def _store_error(job_id: str, err: TideoError, stderr: str = "") -> None:
             "error_stderr": stderr[-4000:],
         })
     except Exception:
-        logger.warning("error store failed job=%s (continuing)", job_id)
+        log.warning("error_store_failed")
 
 
 def _handle_failure(task, job_id: str, preset_name: str, err: TideoError, stderr: str = "") -> NoReturn:
@@ -66,8 +65,8 @@ def _handle_failure(task, job_id: str, preset_name: str, err: TideoError, stderr
     limit = max_retries_for(err)
     if attempt < limit:
         delay = backoff_seconds(attempt)
-        logger.warning("rendition retry job=%s preset=%s code=%s attempt=%d/%d retry_in=%.1fs",
-                       job_id, preset_name, err.code, attempt + 1, limit, delay)
+        log.warning("retry_scheduled", preset=preset_name, code=err.code,
+                    attempt=attempt + 1, limit=limit, retry_in=delay)
         raise task.retry(countdown=delay, exc=RuntimeError(err.code))
     emit(RENDITION_FAILED, job_id, {"preset": preset_name, "error_code": err.code})
     _store_error(job_id, err, stderr)
@@ -96,7 +95,7 @@ def _write_progress(job_id, preset, pct):
         r.hset(f"job:{job_id}", f"progress:{preset}", f"{pct:.1f}")
         r.publish(f"progress:{job_id}", json.dumps({"preset": preset, "percent": pct}))
     except Exception:
-        logger.warning("progress write failed job=%s preset=%s (continuing)", job_id, preset)
+        log.warning("progress_write_failed", preset=preset)
 
 def _encode(argv, *, duration, on_pct, cancelled):
     # own session -> own process group, so _terminate_group can take FFmpeg (and any children) down
@@ -129,6 +128,7 @@ def rendition(self, job_id: str, preset_name: str, src: str, meta: dict) -> dict
     bind_job(job_id)
     m = SourceMeta(**meta)
     preset = PRESETS[preset_name]
+    log.info("rendition_started", preset=preset_name)
     emit(RENDITION_STARTED, job_id, {"preset": preset_name})
     _mark_started(job_id)                                # first rendition flips job -> transcoding
     throttle = Throttle()
@@ -144,17 +144,17 @@ def rendition(self, job_id: str, preset_name: str, src: str, meta: dict) -> dict
             )
             if rc != 0:
                 err = classify(rc, stderr, stage=TRANSCODE)
-                logger.error("rendition failed job=%s preset=%s code=%s rc=%s: %s",
-                             job_id, preset_name, err.code, rc, stderr)
+                log.error("rendition_failed", preset=preset_name, code=err.code, returncode=rc, stderr=stderr)
                 _handle_failure(self, job_id, preset_name, err, stderr)  # retries or raises (tmp cleaned by atomic_dir)
         _write_progress(job_id, preset_name, 100.0)          # confirmed success -> 100
         out_bytes = sum(f.stat().st_size for f in final.glob("*.ts"))
         secs = round(time.monotonic() - started, 1)
+        log.info("rendition_completed", preset=preset_name, output_bytes=out_bytes, encode_seconds=secs)
         emit(RENDITION_COMPLETED, job_id,
              {"preset": preset_name, "output_bytes": out_bytes, "encode_seconds": secs})
         return {"status": "ok", "preset": preset_name, "output_bytes": out_bytes, "encode_seconds": secs}
     except Cancelled:
-        logger.info("rendition cancelled job=%s preset=%s", job_id, preset_name)
+        log.info("rendition_cancelled", preset=preset_name)
         raise Ignore()  # job already marked cancelled by the API; don't fail it via link_error
     except SoftTimeLimitExceeded:
         err = make_error(ENCODE_TIMEOUT, "encode exceeded the time limit", TRANSCODE)

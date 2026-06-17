@@ -1,12 +1,11 @@
 import json
-import logging
 from datetime import datetime, timezone
 from typing import cast
 
 from celery import chord, group
 
 from app.core.config import config
-from app.core.logging import bind_job
+from app.core.logging import bind_job, get_logger
 from app.domain.errors import ENCODE_FAILED_TRANSIENT
 from app.domain.state import transition
 from app.events.producer import emit
@@ -16,7 +15,7 @@ from app.storage.state import get_sync_client
 from app.workers import dlq
 from app.workers.celery_app import app as celery_app
 
-logger = logging.getLogger(__name__)
+log = get_logger()
 
 RENDITION = "app.workers.tasks.rendition.rendition"
 PACKAGE = "app.workers.tasks.package.package"
@@ -44,7 +43,7 @@ def build_and_fire_chord(job_id: str, presets: list[str]) -> None:
         "chord_callback_id": result.id,
         "rendition_ids": json.dumps(header_ids),
     })
-    logger.info("dispatched chord job=%s presets=%s callback=%s", job_id, presets, result.id)
+    log.info("job_dispatched", presets=presets, callback_id=result.id)
 
 
 @celery_app.task(name="app.dispatcher.dispatch.fail_job")

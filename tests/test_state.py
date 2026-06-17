@@ -1,6 +1,5 @@
-import logging
-
 import pytest
+from structlog.testing import capture_logs
 
 from app.domain.state import (
     TERMINAL,
@@ -44,12 +43,12 @@ def test_full_matrix(current, new):
 # ---- terminal-state late events are dropped, not raised ----
 
 @pytest.mark.parametrize("term", sorted(TERMINAL))
-def test_terminal_drops_any_incoming_event(term, caplog):
-    with caplog.at_level(logging.INFO, logger="app.domain.state"):
+def test_terminal_drops_any_incoming_event(term):
+    with capture_logs() as logs:
         # a straggler trying to push a terminal job anywhere is silently dropped
         assert transition(term, "done") is None
         assert transition(term, "transcoding") is None
-    assert any("dropped" in r.message for r in caplog.records)
+    assert [e["event"] for e in logs].count("transition_dropped") == 2
 
 
 def test_true_sinks_have_no_outgoing_transitions():

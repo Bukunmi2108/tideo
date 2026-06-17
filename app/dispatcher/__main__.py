@@ -1,17 +1,17 @@
-import logging, signal, time
+import signal, time
 from confluent_kafka import Consumer, TopicPartition
 from kombu.exceptions import OperationalError
 from redis.exceptions import RedisError
 from app.api.utils import now_iso
 from app.core.config import config
-from app.core.logging import bind_job, clear_log_context, configure_logging
+from app.core.logging import bind_job, clear_log_context, configure_logging, get_logger
 from app.dispatcher.dispatch import build_and_fire_chord
 from app.dispatcher.guard import claim, release
 from app.dispatcher.handler import BadEvent, parse_event, process
 from app.events.topics import TOPIC
 from app.storage.state import get_sync_client
 
-logger = logging.getLogger(__name__)
+log = get_logger()
 _running = True
 
 def _stop(*_):
@@ -43,15 +43,14 @@ def run():
             if msg is None:
                 continue
             if msg.error():
-                logger.warning("consumer error: %s", msg.error())
+                log.warning("consumer_error", error=str(msg.error()))
                 continue
 
             try:
                 env = parse_event(msg.value())
             except BadEvent as e:
                 poison += 1
-                logger.error("poison pill p%s@%s: %s raw=%r",
-                             msg.partition(), msg.offset(), e, msg.value())
+                log.error("poison_pill", partition=msg.partition(), offset=msg.offset(), error=str(e), raw=str(msg.value()))
                 consumer.commit(message=msg, asynchronous=False)
                 continue
 
@@ -61,18 +60,17 @@ def run():
             except (RedisError, OperationalError) as e:
                 # infra down (redis claim, or broker enqueue). The claim (if taken) was released,
                 # so the re-consumed event retries cleanly. Fail CLOSED: don't commit, re-poll same event.
-                logger.error("infra unavailable (%s) — stalling on p%s@%s",
-                             type(e).__name__, msg.partition(), msg.offset())
+                log.error("infra_unavailable", error_type=type(e).__name__, partition=msg.partition(), offset=msg.offset())
                 # a polled non-error message always has topic/partition/offset; stubs say Optional
                 consumer.seek(TopicPartition(msg.topic(), msg.partition(), msg.offset()))  # type: ignore[arg-type]
                 time.sleep(2)
                 continue
 
             consumer.commit(message=msg, asynchronous=False)
-            logger.info("%s job=%s event_id=%s", action, env.get("job_id"), env.get("event_id"))
+            log.info("event_processed", action=action, event_id=env.get("event_id"))
     finally:
         consumer.close() 
-        logger.info("dispatcher stopped (poison=%d)", poison)
+        log.info("dispatcher_stopped", poison=poison)
 
 if __name__ == "__main__":
     configure_logging("dispatcher")

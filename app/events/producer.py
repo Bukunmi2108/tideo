@@ -1,11 +1,11 @@
-import logging
 from confluent_kafka import Producer
 from celery.signals import worker_process_init, worker_process_shutdown
 from app.core.config import config
+from app.core.logging import get_logger
 from app.events.envelope import Envelope
 from app.events.topics import TOPIC
 
-logger = logging.getLogger(__name__)
+log = get_logger()
 _producer: Producer | None = None
 
 def _build() -> Producer:
@@ -24,7 +24,7 @@ def get_producer() -> Producer:
 
 def _on_delivery(err, msg):
     if err is not None:
-        logger.error("kafka delivery failed: %s", err)
+        log.error("kafka_delivery_failed", error=str(err))
 
 def publish(env: Envelope) -> None:
     p = get_producer()
@@ -49,7 +49,7 @@ def emit(event_type: str, job_id: str, payload: dict) -> bool:
         return True
     except Exception:
         _emit_failures += 1
-        logger.warning("emit dropped type=%s job=%s", event_type, job_id, exc_info=True)
+        log.warning("event_emit_dropped", event_type=event_type, exc_info=True)
         return False
 
 def emit_failures() -> int:

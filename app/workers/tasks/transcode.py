@@ -1,12 +1,12 @@
-import logging
 import subprocess
 from celery.exceptions import SoftTimeLimitExceeded
 from app.core.config import config
+from app.core.logging import get_logger
 from app.storage import paths
 from app.workers.base import TranscodeTask
 from app.workers.celery_app import app
 
-logger = logging.getLogger(__name__)
+log = get_logger()
 
 ENCODE_FAILED = "ENCODE_FAILED"
 ENCODE_TIMEOUT = "ENCODE_TIMEOUT"
@@ -46,11 +46,11 @@ def transcode(job_id: str, src: str) -> dict:
             rc, stderr = _run_ffmpeg(_ffmpeg_480p(src, str(tmp)))
             if rc != 0:
                 raise RuntimeError(_tail(stderr))
-        logger.info("transcode ok job=%s -> %s", job_id, final)
+        log.info("transcode_completed", job_id=job_id, output=str(final))
         return {"status": "ok", "output": str(final)}
     except SoftTimeLimitExceeded:
-        logger.error("transcode timeout job=%s code=%s", job_id, ENCODE_TIMEOUT)
+        log.error("transcode_timeout", job_id=job_id, code=ENCODE_TIMEOUT)
         return {"status": "failed", "error": {"code": ENCODE_TIMEOUT, "message": "soft time limit exceeded"}}
     except RuntimeError as e:
-        logger.error("transcode failed job=%s code=%s msg=%s", job_id, ENCODE_FAILED, e)
+        log.error("transcode_failed", job_id=job_id, code=ENCODE_FAILED, error=str(e))
         return {"status": "failed", "error": {"code": ENCODE_FAILED, "message": str(e)}}

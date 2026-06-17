@@ -1,9 +1,10 @@
 import json
-import logging
 
 from pydantic import BaseModel
 
-logger = logging.getLogger(__name__)
+from app.core.logging import get_logger
+
+log = get_logger()
 
 
 class JobResponse(BaseModel):
@@ -36,7 +37,7 @@ def _safe_loads(raw: str | None, field: str, job_id: str):
     try:
         return json.loads(raw)
     except (json.JSONDecodeError, TypeError):
-        logger.warning("malformed %s for job=%s; omitting", field, job_id)
+        log.warning("malformed_field", field=field, job_id=job_id)
         return None
 
 

@@ -1,6 +1,6 @@
-import logging
+from app.core.logging import get_logger
 
-logger = logging.getLogger(__name__)
+log = get_logger()
 
 TERMINAL = {"done", "failed", "cancelled", "expired"}
 
@@ -22,6 +22,6 @@ def transition(current: str, new: str, *, job_id: str = "", caller: str = "") ->
     if new in TRANSITIONS.get(current, set()):
         return new
     if current in TERMINAL:
-        logger.info("dropped %s->%s (terminal) job=%s caller=%s", current, new, job_id, caller)
+        log.info("transition_dropped", from_state=current, to_state=new, job_id=job_id, caller=caller)
         return None
     raise IllegalTransition(f"{current} -> {new} (job={job_id} caller={caller})")

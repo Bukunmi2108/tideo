@@ -1,5 +1,4 @@
 import asyncio
-import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Response, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -8,13 +7,13 @@ from app.api.errors import ApiError
 from app.api.routes import upload, job, artifacts, admin
 from app.core.config import config
 from psycopg2 import InterfaceError, OperationalError
-from app.core.logging import configure_logging
+from app.core.logging import configure_logging, get_logger
 from app.events.admin import ensure_topics
 from app.events.producer import flush_producer
 from app.storage.db import init_schema
 from app.api import ws as ws_module
 
-logger = logging.getLogger(__name__)
+log = get_logger()
 
 
 @asynccontextmanager
@@ -57,7 +56,7 @@ async def _api_error(request, exc):
 
 async def _db_unavailable(request, exc):
     # transient DB outage on a read -> retryable 503; non-transient psycopg2 errors fall through to 500
-    logger.warning("postgres unavailable on read: %s", exc)
+    log.warning("db_unavailable_on_read", error=str(exc))
     return JSONResponse(status_code=503, content={"error": {
         "code": "DB_UNAVAILABLE", "message": "service temporarily unavailable, retry shortly",
         "job_id": None, "retryable": True}})
@@ -68,7 +67,7 @@ app.add_exception_handler(InterfaceError, _db_unavailable)
 
 @app.exception_handler(Exception)
 async def _unhandled(request, exc):
-    logger.exception("unhandled error")
+    log.exception("unhandled_error")
     return JSONResponse(status_code=500, content={"error": {
         "code": "INTERNAL", "message": "internal error", "job_id": None, "retryable": False}})
 

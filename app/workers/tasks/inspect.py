@@ -3,16 +3,15 @@ from dataclasses import asdict
 from app.core.config import config
 from app.domain import recommend
 from app.domain.state import transition
-from app.core.logging import bind_job
+from app.core.logging import bind_job, get_logger
 from app.storage.db import persist_terminal
 from app.storage.state import get_sync_client
 from app.workers import ffprobe
 from app.workers.base import InspectTask
 from app.workers.celery_app import app
-import logging
 from typing import cast
 
-logger = logging.getLogger(__name__)
+log = get_logger()
 
 
 def _current_status(r, job_id: str) -> str:
@@ -39,7 +38,7 @@ def probe(job_id: str, src: str) -> dict:
             "web_safe_reason": reason or "",
             "recommended_presets": json.dumps(presets),
         })
-        logger.info("inspect ok job=%s presets=%s web_safe=%s", job_id, presets, safe)
+        log.info("inspect_completed", presets=presets, web_safe=safe)
         return {"status": "ok", "job_id": job_id}
     except ffprobe.InspectError as e:
         cur = _current_status(r, job_id)
@@ -52,5 +51,5 @@ def probe(job_id: str, src: str) -> dict:
         })
         r.expire(f"job:{job_id}", config.output_ttl_days * 86400)
         persist_terminal(job_id, r.hgetall(f"job:{job_id}"))
-        logger.error("inspect failed job=%s code=%s", job_id, e.code)
+        log.error("inspect_failed", code=e.code)
         return {"status": "failed", "error": {"code": e.code, "message": e.message}}

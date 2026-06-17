@@ -1,4 +1,3 @@
-import logging
 import signal
 
 import psycopg2
@@ -6,11 +5,11 @@ from confluent_kafka import Consumer
 from psycopg2.extras import Json
 
 from app.core.config import config
-from app.core.logging import bind_job, clear_log_context, configure_logging
+from app.core.logging import bind_job, clear_log_context, configure_logging, get_logger
 from app.dispatcher.handler import BadEvent, parse_event
 from app.events.topics import TOPIC
 
-logger = logging.getLogger(__name__)
+log = get_logger()
 _running = True
 
 
@@ -97,13 +96,13 @@ def run():
             if msg is None:
                 continue
             if msg.error():
-                logger.warning("consumer error: %s", msg.error())
+                log.warning("consumer_error", error=str(msg.error()))
                 continue
 
             try:
                 env = parse_event(msg.value())
             except BadEvent as e:
-                logger.error("poison pill p%s@%s: %s", msg.partition(), msg.offset(), e)
+                log.error("poison_pill", partition=msg.partition(), offset=msg.offset(), error=str(e))
                 consumer.commit(message=msg, asynchronous=False)
                 continue
 
@@ -111,21 +110,18 @@ def run():
             try:
                 result = store_event(conn, env)
             except _TRANSIENT:
-                logger.error("postgres unavailable — not committing, will retry p%s@%s",
-                             msg.partition(), msg.offset())
+                log.error("postgres_unavailable", partition=msg.partition(), offset=msg.offset())
                 continue
             if result == "poison":
                 poison += 1
-                logger.error("unstorable event p%s@%s event_id=%s — skipping",
-                             msg.partition(), msg.offset(), env.get("event_id"))
+                log.error("event_unstorable", partition=msg.partition(), offset=msg.offset(), event_id=env.get("event_id"))
             consumer.commit(message=msg, asynchronous=False)
             if result == "stored":
-                logger.info("audited %s job=%s event_id=%s",
-                            env["event_type"], env["job_id"], env["event_id"])
+                log.info("event_audited", event_type=env["event_type"], event_id=env["event_id"])
     finally:
         consumer.close()
         conn.close()
-        logger.info("audit stopped (poison=%d)", poison)
+        log.info("audit_stopped", poison=poison)
 
 
 if __name__ == "__main__":

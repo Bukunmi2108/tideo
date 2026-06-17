@@ -1,17 +1,16 @@
 import asyncio
 import json
-import logging
 from typing import cast
 import redis.asyncio as aioredis
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from app.api.model import progress_map, results_view
 from app.core.config import config
-from app.core.logging import bind_job
+from app.core.logging import bind_job, get_logger
 from app.domain.state import TERMINAL
 from app.storage.state import get_client
 
 router = APIRouter()
-logger = logging.getLogger(__name__)
+log = get_logger()
 
 PING_INTERVAL = 25 # seconds
 
@@ -84,9 +83,9 @@ async def progress_ws(ws: WebSocket, job_id: str):
             ping_task.cancel()
 
     except WebSocketDisconnect:
-        logger.debug("ws disconnect job=%s", job_id)
+        log.debug("ws_disconnected")
     except Exception:
-        logger.exception("ws error job=%s", job_id)
+        log.exception("ws_error")
     finally:
         # always unsubscribe + close the dedicated pub/sub connection — no leaked subscriptions
         await ps.unsubscribe()
