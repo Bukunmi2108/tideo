@@ -83,13 +83,6 @@ function howItWorks(): string {
   </section>`;
 }
 
-function closer(): string {
-  return `<section class="lp-closer">
-    <h2 class="lp-closer-title">Drop a file and watch the ladder build.</h2>
-    <a href="/upload" class="btn btn-primary btn-lg">Upload a video</a>
-  </section>`;
-}
-
 export function mount(root: HTMLElement): () => void {
   const ctrl = new AbortController();
   let loop: Loop | null = null;
@@ -98,7 +91,6 @@ export function mount(root: HTMLElement): () => void {
     <main class="lp-main">
       ${hero()}
       ${howItWorks()}
-      ${closer()}
     </main>`;
 
   // hydrate the hero screen with a real job's sprite, auto-advancing like a preview
