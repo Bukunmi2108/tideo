@@ -1,6 +1,6 @@
 import json, subprocess, threading, time
 from collections import deque
-from typing import cast
+from typing import NoReturn, cast
 from celery.exceptions import SoftTimeLimitExceeded
 from app.domain.errors import TideoError, classify, make_error, ENCODE_TIMEOUT, TRANSCODE
 from app.domain.state import transition
@@ -13,6 +13,7 @@ from app.workers.ffmpeg import build_rendition_argv
 from app.workers.ffprobe import SourceMeta
 from app.workers.progress import Throttle, parse_progress_blocks, percent
 from app.workers.base import TranscodeTask
+from app.workers.retry import backoff_seconds, max_retries_for
 from app.workers.celery_app import app
 import logging
 
@@ -27,6 +28,21 @@ def _store_error(job_id: str, err: TideoError) -> None:
         })
     except Exception:
         logger.warning("error store failed job=%s (continuing)", job_id)
+
+
+def _handle_failure(task, job_id: str, preset_name: str, err: TideoError) -> NoReturn:
+    """Retry a retryable failure with full-jitter backoff; on exhaustion or a permanent
+    error, emit the failed fact and raise so the chord fails the job (ADR-3)."""
+    attempt = task.request.retries  # 0 on the first run
+    limit = max_retries_for(err)
+    if attempt < limit:
+        delay = backoff_seconds(attempt)
+        logger.warning("rendition retry job=%s preset=%s code=%s attempt=%d/%d retry_in=%.1fs",
+                       job_id, preset_name, err.code, attempt + 1, limit, delay)
+        raise task.retry(countdown=delay, exc=RuntimeError(err.code))
+    emit(RENDITION_FAILED, job_id, {"preset": preset_name, "error_code": err.code})
+    _store_error(job_id, err)
+    raise RuntimeError(err.code)
 
 
 def _mark_started(job_id):
@@ -66,8 +82,8 @@ def _encode(argv, *, duration, on_pct):
     drain.join(timeout=1)
     return proc.returncode, "\n".join(tail)
 
-@app.task(base=TranscodeTask)
-def rendition(job_id: str, preset_name: str, src: str, meta: dict) -> dict:
+@app.task(bind=True, base=TranscodeTask)
+def rendition(self, job_id: str, preset_name: str, src: str, meta: dict) -> dict:
     m = SourceMeta(**meta)
     preset = PRESETS[preset_name]
     emit(RENDITION_STARTED, job_id, {"preset": preset_name})
@@ -86,9 +102,7 @@ def rendition(job_id: str, preset_name: str, src: str, meta: dict) -> dict:
                 err = classify(rc, stderr, stage=TRANSCODE)
                 logger.error("rendition failed job=%s preset=%s code=%s rc=%s: %s",
                              job_id, preset_name, err.code, rc, stderr)
-                emit(RENDITION_FAILED, job_id, {"preset": preset_name, "error_code": err.code})
-                _store_error(job_id, err)
-                raise RuntimeError(err.code)  # fail the chord (link_error -> fail_job, ADR-3); tmp cleaned by atomic_dir
+                _handle_failure(self, job_id, preset_name, err)  # retries or raises (tmp cleaned by atomic_dir)
         _write_progress(job_id, preset_name, 100.0)          # confirmed success -> 100
         out_bytes = sum(f.stat().st_size for f in final.glob("*.ts"))
         secs = round(time.monotonic() - started, 1)
@@ -97,6 +111,4 @@ def rendition(job_id: str, preset_name: str, src: str, meta: dict) -> dict:
         return {"status": "ok", "preset": preset_name, "output_bytes": out_bytes}
     except SoftTimeLimitExceeded:
         err = make_error(ENCODE_TIMEOUT, "encode exceeded the time limit", TRANSCODE)
-        emit(RENDITION_FAILED, job_id, {"preset": preset_name, "error_code": err.code})
-        _store_error(job_id, err)
-        raise
+        _handle_failure(self, job_id, preset_name, err)
