@@ -117,8 +117,7 @@ services:
       - tideo-net
   
   worker-heavy:
-    container_name: tideo_worker_heavy
-    restart: unless-stopped
+    restart: unless-stopped              # no container_name -> `docker compose up -d --scale worker-heavy=N` works
     build:
       context: .
       dockerfile: Dockerfile.worker
