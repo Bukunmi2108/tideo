@@ -29,6 +29,7 @@ async def get_job(job_id: str):
     resp = {"job_id": job_id, "status": status}
     if status == "awaiting_choice":
         resp["source"] = json.loads(rec["source_meta"])
+        resp["source_filename"] = rec.get("source_filename") or None
         resp["recommended_presets"] = json.loads(rec["recommended_presets"])
         resp["web_safe"] = rec["web_safe"] == "true"
         resp["web_safe_reason"] = rec.get("web_safe_reason") or None

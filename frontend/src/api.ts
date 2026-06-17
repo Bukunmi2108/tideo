@@ -52,6 +52,7 @@ export interface JobResponse {
   job_id: string
   status: JobStatus
   source?: SourceMeta
+  source_filename?: string | null
   recommended_presets?: string[]
   web_safe?: boolean
   web_safe_reason?: string | null

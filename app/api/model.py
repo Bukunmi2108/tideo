@@ -10,6 +10,7 @@ class JobResponse(BaseModel):
     job_id: str
     status: str
     source: dict | None = None
+    source_filename: str | None = None
     recommended_presets: list[str] | None = None
     web_safe: bool | None = None
     web_safe_reason: str | None = None

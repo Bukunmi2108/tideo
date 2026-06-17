@@ -246,11 +246,170 @@ body.drag-active .upload-zone {
   padding: var(--sp-7) var(--sp-5);
 }
 
+.inspect-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-xl);
+  padding: var(--sp-6);
+  width: 100%;
+  max-width: 520px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-5);
+  box-shadow: var(--shadow);
+}
+
+.inspect-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+}
+
+.inspect-title {
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.badge {
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 3px var(--sp-2);
+  border-radius: var(--r-sm);
+  cursor: help;
+}
+.badge-ok   { background: color-mix(in srgb, var(--success) 18%, transparent); color: var(--success); }
+.badge-warn { background: color-mix(in srgb, var(--warning) 18%, transparent); color: var(--warning); }
+
+/* ---- Spec sheet ----------------------------------------------------------- */
+
+.spec-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--sp-2) var(--sp-5);
+}
+
+.spec-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  padding: var(--sp-2) 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.spec-key { color: var(--text-dim); font-size: 13px; }
+.spec-val { font-variant-numeric: tabular-nums; font-size: 14px; text-align: right; }
+
+/* ---- Preset picker -------------------------------------------------------- */
+
+.picker {
+  border: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+
+.picker-legend {
+  font-size: 13px;
+  color: var(--text-dim);
+  margin-bottom: var(--sp-2);
+}
+
+.picker-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-3);
+  border-radius: var(--r);
+  cursor: pointer;
+  transition: background var(--transition);
+}
+.picker-row:hover { background: var(--surface-2); }
+
+.picker-row input { accent-color: var(--accent); width: 16px; height: 16px; }
+
+.picker-label { font-weight: 500; }
+.picker-res { color: var(--text-dim); font-size: 13px; font-variant-numeric: tabular-nums; }
+.picker-reason { margin-left: auto; color: var(--text-xdim); font-size: 12px; }
+
+.picker-row--disabled { cursor: not-allowed; }
+.picker-row--disabled:hover { background: none; }
+.picker-row--disabled .picker-label,
+.picker-row--disabled .picker-res { color: var(--text-xdim); }
+
+/* ---- Subtitles toggle ----------------------------------------------------- */
+
+.toggle-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  font-size: 14px;
+}
+.toggle-disabled { color: var(--text-xdim); cursor: not-allowed; }
+.toggle-note {
+  margin-left: auto;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-xdim);
+}
+
+/* ---- Commit row ----------------------------------------------------------- */
+
+.commit-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-4);
+}
+.estimate { color: var(--text-dim); font-size: 13px; font-variant-numeric: tabular-nums; }
+.commit-error { color: var(--danger); font-size: 13px; }
+.btn-primary:disabled { background: var(--surface-3); color: var(--text-xdim); cursor: not-allowed; }
+
+/* ---- Terminal / message cards --------------------------------------------- */
+
+.inspect-card--terminal { align-items: flex-start; text-align: left; gap: var(--sp-4); }
+.term-code {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--danger);
+}
+.term-msg { color: var(--text-dim); font-size: 14px; }
+
+/* ---- Skeleton ------------------------------------------------------------- */
+
+@keyframes shimmer { to { background-position: -200% 0; } }
+
+.sk {
+  border-radius: var(--r-sm);
+  background: linear-gradient(90deg, var(--surface-2) 25%, var(--surface-3) 50%, var(--surface-2) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.4s linear infinite;
+}
+.sk-title { width: 55%; height: 22px; }
+.sk-badge { width: 84px; height: 20px; }
+.sk-key   { width: 60px; height: 14px; }
+.sk-val   { width: 80px; height: 14px; }
+.sk-pick  { width: 100%; height: 20px; }
+.sk-btn   { width: 100%; height: 40px; border-radius: var(--r); }
+
 /* ---- Responsive ----------------------------------------------------------- */
 
 @media (max-width: 520px) {
   .upload-card { padding: var(--sp-5); }
+  .inspect-card { padding: var(--sp-5); }
   .site-header { padding: 0 var(--sp-4); }
+  .spec-grid { grid-template-columns: 1fr; gap: 0 var(--sp-5); }
+  .commit-row { flex-direction: column; align-items: stretch; }
+  .commit-row .btn { width: 100%; }
 }
 
 /* ---- Reduced motion ------------------------------------------------------- */

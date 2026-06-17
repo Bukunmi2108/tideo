@@ -63,6 +63,7 @@ def test_awaiting_choice_shape(client):
         fake, "j2",
         status="awaiting_choice",
         source_meta=json.dumps(meta),
+        source_filename="holiday.mov",
         recommended_presets=json.dumps(["1080p", "720p", "480p", "360p"]),
         web_safe="true",
         web_safe_reason="",
@@ -70,6 +71,7 @@ def test_awaiting_choice_shape(client):
     body = c.get("/jobs/j2").json()
     assert body["status"] == "awaiting_choice"
     assert body["source"] == meta
+    assert body["source_filename"] == "holiday.mov"
     assert body["recommended_presets"] == ["1080p", "720p", "480p", "360p"]
     assert body["web_safe"] is True
     assert body["web_safe_reason"] is None  # empty stored reason -> None

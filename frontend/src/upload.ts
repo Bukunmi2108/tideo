@@ -1,5 +1,6 @@
 import "./style.css"
 import { apiBase, type UploadResponse } from "./api"
+import { esc, humanBytes } from "./render"
 
 // ---- State ----------------------------------------------------------------
 
@@ -30,17 +31,6 @@ fileInput.style.display = "none"
 document.body.appendChild(fileInput)
 
 // ---- Utilities ------------------------------------------------------------
-
-function esc(s: string): string {
-  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;")
-}
-
-function humanBytes(b: number): string {
-  if (b < 1024) return `${b} B`
-  if (b < 1024 ** 2) return `${(b / 1024).toFixed(1)} KB`
-  if (b < 1024 ** 3) return `${(b / 1024 ** 2).toFixed(1)} MB`
-  return `${(b / 1024 ** 3).toFixed(2)} GB`
-}
 
 const ERROR_HEADLINES: Record<string, string> = {
   UPLOAD_TOO_LARGE:   "File too large",
