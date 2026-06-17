@@ -23,6 +23,7 @@ const ERROR_HEADLINES: Record<string, string> = {
   INVALID_UPLOAD:     "Invalid file",
   NETWORK_ERROR:      "Connection failed",
   SERVER_ERROR:       "Server error",
+  STORAGE_PRESSURE:   "Storage full",
 }
 function errorHeadline(code: string): string {
   return ERROR_HEADLINES[code] ?? "Upload failed"

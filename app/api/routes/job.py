@@ -10,8 +10,9 @@ from app.api.model import (
 from app.core.config import config
 from app.storage.state import get_client
 from app.storage.db import persist_terminal, get_job as db_get_job, list_jobs as db_list_jobs
+from app.storage.pressure import under_pressure
 from app.storage import paths
-from app.api.errors import ApiError
+from app.api.errors import ApiError, StoragePressure
 from app.domain.state import transition
 from app.events.envelope import Envelope
 from app.events.producer import publish
@@ -130,6 +131,8 @@ async def transcode(job_id: str, body: TranscodeRequest):
     if not body.presets or bad:
         raise ApiError(422, "PRESET_NOT_RECOMMENDED",
                        f"presets not in recommendation: {bad or body.presets}", job_id=job_id)
+    if under_pressure():                                   # gate new encode work; in-flight jobs are untouched
+        raise StoragePressure()
 
     nxt = transition("awaiting_choice", "queued", job_id=job_id, caller="transcode")
     assert nxt is not None

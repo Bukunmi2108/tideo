@@ -12,5 +12,9 @@ class UnsupportedMedia(ApiError):
         super().__init__(415, "UNSUPPORTED_MEDIA", message)
 
 class UploadTooLarge(ApiError):
-    def __init__(self): 
+    def __init__(self):
         super().__init__(413, "UPLOAD_TOO_LARGE", "file exceeds the size limit")
+
+class StoragePressure(ApiError):
+    def __init__(self):
+        super().__init__(503, "STORAGE_PRESSURE", "storage is full, please try again later", retryable=True)

@@ -27,7 +27,19 @@ def client(monkeypatch):
     spy = []
     monkeypatch.setattr(job_route, "get_client", lambda: fake)
     monkeypatch.setattr(job_route, "publish", lambda env: spy.append(env))
+    monkeypatch.setattr(job_route, "under_pressure", lambda: False)   # deterministic: not shedding by default
     return TestClient(app, raise_server_exceptions=False), fake, spy
+
+
+def test_transcode_sheds_under_storage_pressure(client, monkeypatch):
+    c, fake, spy = client
+    seed_awaiting(fake, "jp", ["480p"])
+    monkeypatch.setattr(job_route, "under_pressure", lambda: True)
+    r = c.post("/jobs/jp/transcode", json={"presets": ["480p"]})
+    assert r.status_code == 503
+    err = r.json()["error"]
+    assert err["code"] == "STORAGE_PRESSURE" and err["retryable"] is True
+    assert spy == [] and fake.hashes["job:jp"]["status"] == "awaiting_choice"   # no enqueue, state untouched
 
 
 def seed_awaiting(fake, job_id, presets):

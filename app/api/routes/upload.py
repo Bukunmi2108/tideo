@@ -4,11 +4,12 @@ from pathlib import Path
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
-from app.api.errors import InvalidUpload, UnsupportedMedia, UploadTooLarge
+from app.api.errors import InvalidUpload, StoragePressure, UnsupportedMedia, UploadTooLarge
 from app.api.utils import new_job_id, now_iso
 from app.core.config import config
 from app.storage.state import get_client
 from app.storage.writer import stream_to_disk
+from app.storage.pressure import under_pressure
 from app.workers.celery_app import app as celery_app
 from app.storage import dedupe
 
@@ -24,6 +25,8 @@ async def upload(request: Request, filename: str | None = None):
     ext = Path(filename).suffix.lower()
     if ext not in ALLOWED_EXTS:
         raise UnsupportedMedia(f"unsupported extension: {ext}")
+    if under_pressure():                                   # shed new work before the disk refuses it disgracefully
+        raise StoragePressure()
 
     job_id = new_job_id()
     dest = config.uploads_dir / job_id / f"source{ext}"

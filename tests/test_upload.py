@@ -15,7 +15,18 @@ def client(monkeypatch, tmp_path):
     fake_redis = AsyncMock()
     monkeypatch.setattr(up, "get_client", lambda: fake_redis)
     monkeypatch.setattr(up.celery_app, "send_task", MagicMock())   # don't touch the broker
+    monkeypatch.setattr(up, "under_pressure", lambda: False)       # deterministic: not shedding by default
     return TestClient(app, raise_server_exceptions=False), fake_redis, tmp_path
+
+
+def test_upload_sheds_under_storage_pressure(client, monkeypatch):
+    c, fake_redis, _ = client
+    monkeypatch.setattr(up, "under_pressure", lambda: True)
+    r = c.post("/upload?filename=clip.mp4", content=b"hello")
+    assert r.status_code == 503
+    err = r.json()["error"]
+    assert err["code"] == "STORAGE_PRESSURE" and err["retryable"] is True
+    fake_redis.hset.assert_not_called()                            # shed before any work (no job created)
 
 
 def test_valid_upload_returns_202_and_hashes(client):
