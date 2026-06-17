@@ -1,4 +1,3 @@
-import "./style.css"
 import { getJob, postTranscode, ApiError, apiBase, type JobResponse, type JobError, type JobResults } from "./api"
 import { watch, type StateFrame } from "./live"
 import { mountPlayer, type PlayerHandle } from "./player"
@@ -19,8 +18,8 @@ type View =
   | { tag: "notfound" }
   | { tag: "error"; message: string }
 
-const appEl = document.getElementById("app")!
-const jobId = new URLSearchParams(location.search).get("id")
+let appEl: HTMLElement // set in mount()
+let jobId: string | null = null
 
 let view: View = { tag: "loading" }
 let rows: PickerRow[] = []
@@ -492,6 +491,33 @@ function refreshCommit(): void {
   if (btn) btn.disabled = selected.size === 0 || committing
 }
 
-// ---- Boot -----------------------------------------------------------------
+// ---- Mount ----------------------------------------------------------------
 
-void load()
+export function mount(root: HTMLElement, query: URLSearchParams): () => void {
+  appEl = root
+  jobId = query.get("id")
+  // reset per-mount state so navigating back to a job starts clean
+  view = { tag: "loading" }
+  rows = []
+  selected = new Set()
+  duration = 0
+  committing = false
+  commitError = null
+  presets = []
+  progress = {}
+  mode = "live"
+  posterReady = false
+  pollTimer = null
+  thumbTimer = null
+  unwatch = null
+  player = null
+  errorAttempts = 0
+  // gen is NOT reset — it stays monotonic across mounts so a stale in-flight load() can't write into a remount's DOM
+
+  void load()
+
+  return () => {
+    cancelPoll() // clears pollTimer, stops watch + thumbs, bumps gen
+    if (player) { player.destroy(); player = null }
+  }
+}
