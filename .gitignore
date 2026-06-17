@@ -25,6 +25,8 @@ Thumbs.db
 
 frontend/node_modules/
 frontend/dist/
+frontend/tsconfig.tsbuildinfo
+.env
 
 fixtures/*
 !fixtures/reference/

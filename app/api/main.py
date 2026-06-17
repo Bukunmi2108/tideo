@@ -2,6 +2,7 @@ import asyncio
 import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Response, status
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from app.api.errors import ApiError
 from app.api.routes import upload, job, artifacts
@@ -21,6 +22,13 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title="Tideo", version="0.0.1", lifespan=lifespan)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 app.include_router(upload.router)
