@@ -1,13 +1,16 @@
+import json
+import shutil
 from fastapi import APIRouter
+from pydantic import BaseModel
 from app.api.model import JobResponse, progress_map, results_view
 from app.storage.state import get_client
+from app.storage import paths
 from app.api.errors import ApiError
-import json
-from pydantic import BaseModel
 from app.domain.state import transition
 from app.events.envelope import Envelope
 from app.events.producer import publish
-from app.events.topics import JOB_CREATED
+from app.events.topics import JOB_CREATED, JOB_CANCELLED
+from app.workers.celery_app import app as celery_app
 
 
 router = APIRouter(tags=["Job"])
@@ -73,4 +76,30 @@ async def transcode(job_id: str, body: TranscodeRequest):
     publish(Envelope(JOB_CREATED, job_id, {
         "presets": body.presets, "subtitles": body.subtitles, "source_duration": duration,
     }))
+    return {"job_id": job_id, "status": nxt}
+
+
+@router.post("/jobs/{job_id}/cancel", status_code=202)
+async def cancel(job_id: str):
+    r = get_client()
+    rec = await r.hgetall(f"job:{job_id}")
+    if not rec:
+        raise ApiError(404, "JOB_NOT_FOUND", "no such job", job_id=job_id)
+    if rec["status"] not in ("queued", "transcoding"):
+        raise ApiError(409, "WRONG_STATE", f"job is {rec['status']}, not cancellable", job_id=job_id)
+
+    nxt = transition(rec["status"], "cancelled", job_id=job_id, caller="cancel")
+    assert nxt is not None
+    await r.set(f"cancel:{job_id}", "1", ex=3600)          # flag the running encode loop to kill FFmpeg
+    await r.hset(f"job:{job_id}", mapping={"status": nxt})
+
+    ids = json.loads(rec.get("rendition_ids") or "[]")
+    if rec.get("chord_callback_id"):
+        ids.append(rec["chord_callback_id"])
+    if ids:
+        celery_app.control.revoke(ids)
+
+    publish(Envelope(JOB_CANCELLED, job_id, {}))
+    await r.publish(f"progress:{job_id}", json.dumps({"event": "terminal"}))  # wake a live WS relay
+    shutil.rmtree(paths.output_dir(job_id), ignore_errors=True)               # job won't ship; drop partials
     return {"job_id": job_id, "status": nxt}

@@ -114,6 +114,11 @@ input:focus-visible, button:focus-visible, [tabindex]:focus-visible {
 }
 .btn-ghost:hover { background: var(--surface-2); color: var(--text); }
 
+.btn-danger { background: var(--danger); color: #fff; }
+.btn-danger:hover { background: var(--danger-dim); }
+
+.cancel-confirm { display: flex; gap: var(--sp-3); }
+
 /* ---- Upload page ---------------------------------------------------------- */
 
 .upload-main {

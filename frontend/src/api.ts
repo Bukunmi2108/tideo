@@ -111,3 +111,7 @@ export function postTranscode(jobId: string, body: TranscodeRequest): Promise<{ 
     body: JSON.stringify(body),
   })
 }
+
+export function postCancel(jobId: string): Promise<{ job_id: string; status: string }> {
+  return request(`/jobs/${jobId}/cancel`, { method: "POST" })
+}

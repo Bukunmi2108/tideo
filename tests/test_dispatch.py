@@ -79,6 +79,8 @@ def test_fail_job_marks_failed_and_revokes_siblings(monkeypatch):
     assert revoked == ["r0", "r1"]                           # siblings revoked
     assert fake.published == [("progress:j1", json.dumps({"event": "terminal"}))]  # wakes live WS
     assert fake.hashes["job:j1"]["error_code"] == "ENCODE_FAILED_TRANSIENT"  # no rendition error stored -> default
+    dlq_rec = json.loads(fake.hashes["dlq"]["j1"])                           # final failure lands in the DLQ
+    assert dlq_rec["error_code"] == "ENCODE_FAILED_TRANSIENT" and dlq_rec["job_id"] == "j1"
 
 
 def test_fail_job_preserves_classified_error_from_rendition(monkeypatch):
@@ -95,6 +97,7 @@ def test_fail_job_preserves_classified_error_from_rendition(monkeypatch):
 
     assert fake.hashes["job:j1"]["error_code"] == "SOURCE_UNSUPPORTED"  # classifier's verdict kept, not overwritten
     assert codes == ["SOURCE_UNSUPPORTED"]                              # JOB_FAILED carries the real code
+    assert json.loads(fake.hashes["dlq"]["j1"])["error_code"] == "SOURCE_UNSUPPORTED"  # DLQ record carries it too
 
 
 def test_fail_job_on_already_terminal_is_noop(monkeypatch):

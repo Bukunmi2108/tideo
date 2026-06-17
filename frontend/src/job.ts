@@ -1,4 +1,4 @@
-import { getJob, postTranscode, ApiError, apiBase, type JobResponse, type JobError, type JobResults } from "./api"
+import { getJob, postTranscode, postCancel, ApiError, apiBase, type JobResponse, type JobError, type JobResults } from "./api"
 import { watch, type StateFrame } from "./live"
 import { mountPlayer, type PlayerHandle } from "./player"
 import { esc, humanDuration, humanBitrate } from "./render"
@@ -32,6 +32,7 @@ let commitError: string | null = null
 let presets: string[] = []
 let progress: Record<string, number> = {}
 let mode: "live" | "polling" = "live"
+let confirmingCancel = false
 
 // async drivers (one set at a time)
 let pollTimer: ReturnType<typeof setTimeout> | null = null
@@ -117,8 +118,18 @@ function startProgress(job: JobResponse): void {
   presets = job.presets ?? []
   progress = job.progress ?? {}
   mode = "live"
+  confirmingCancel = false
   setView({ tag: "progress" })
   startWatch()
+}
+
+async function doCancel(): Promise<void> {
+  if (!jobId) return
+  try {
+    await postCancel(jobId)
+  } catch (e) {
+    if (e instanceof ApiError && e.status === 409) return load()  
+  }
 }
 
 function startWatch(): void {
@@ -330,7 +341,12 @@ function cardProgress(): string {
       </div>
       <div class="bars">${presets.map(progressBar).join("") || '<p class="term-msg">Queued…</p>'}</div>
       <p class="progress-status" id="progress-status">${statusLine()}</p>
-      <button class="btn btn-ghost" disabled title="Cancellation arrives in Phase 6">Cancel</button>
+      ${confirmingCancel
+        ? `<div class="cancel-confirm">
+             <button class="btn btn-danger" id="cancel-confirm-btn" type="button">Confirm cancel</button>
+             <button class="btn btn-ghost" id="cancel-keep-btn" type="button">Keep going</button>
+           </div>`
+        : `<button class="btn btn-ghost" id="cancel-btn" type="button">Cancel</button>`}
     </div>
   `
 }
@@ -430,6 +446,10 @@ function bind(): void {
   })
   document.getElementById("commit-btn")?.addEventListener("click", () => void commit())
 
+  document.getElementById("cancel-btn")?.addEventListener("click", () => { confirmingCancel = true; render() })
+  document.getElementById("cancel-keep-btn")?.addEventListener("click", () => { confirmingCancel = false; render() })
+  document.getElementById("cancel-confirm-btn")?.addEventListener("click", () => void doCancel())
+
   if (view.tag === "done") {
     const base = apiBase()
     document.getElementById("copy-master")?.addEventListener("click", (e) =>
@@ -480,6 +500,7 @@ export function mount(root: HTMLElement, query: URLSearchParams): () => void {
   presets = []
   progress = {}
   mode = "live"
+  confirmingCancel = false
   pollTimer = null
   unwatch = null
   player = null

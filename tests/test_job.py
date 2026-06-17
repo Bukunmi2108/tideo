@@ -9,13 +9,23 @@ from app.api.routes import job as job_route
 
 
 class FakeRedis:
-    """Async Redis with just the read path GET /jobs/{id} needs."""
+    """Async Redis with the read path GET /jobs/{id} needs, plus cancel's writes."""
 
     def __init__(self):
         self.hashes = {}
+        self.kv = {}
 
     async def hgetall(self, k):
         return dict(self.hashes.get(k, {}))
+
+    async def set(self, k, v, ex=None):
+        self.kv[k] = v
+
+    async def hset(self, k, mapping=None):
+        self.hashes.setdefault(k, {}).update({kk: str(vv) for kk, vv in (mapping or {}).items()})
+
+    async def publish(self, ch, msg):
+        pass
 
 
 @pytest.fixture
@@ -166,6 +176,38 @@ def test_results_view_malformed_json_fails_soft(bad):
 def test_progress_map_extracts_only_progress_fields():
     rec = {"status": "transcoding", "progress:720p": "100.0", "progress:480p": "0.0", "source_path": "/x"}
     assert progress_map(rec) == {"720p": 100.0, "480p": 0.0}
+
+
+# ---- cancel ----
+
+@pytest.mark.parametrize("status", ["queued", "transcoding"])
+def test_cancel_transitions_flags_and_revokes(client, monkeypatch, tmp_path, status):
+    c, fake = client
+    seed(fake, "jc", status=status, rendition_ids=json.dumps(["r0", "r1"]), chord_callback_id="cb")
+    revoked, published = [], []
+    monkeypatch.setattr(job_route.celery_app.control, "revoke", lambda ids, **k: revoked.append((ids, k)))
+    monkeypatch.setattr(job_route, "publish", lambda env: published.append(env.event_type))
+    monkeypatch.setattr(job_route.paths, "output_dir", lambda jid: tmp_path)
+
+    r = c.post("/jobs/jc/cancel")
+
+    assert r.status_code == 202 and r.json()["status"] == "cancelled"
+    assert fake.hashes["job:jc"]["status"] == "cancelled"
+    assert fake.kv["cancel:jc"] == "1"                       # flag the running encode loop
+    assert revoked[0][0] == ["r0", "r1", "cb"]               # header + callback revoked (no terminate)
+    assert "job.cancelled" in published
+
+
+@pytest.mark.parametrize("status", ["done", "failed", "awaiting_choice"])
+def test_cancel_wrong_state_is_409(client, status):
+    c, fake = client
+    seed(fake, "jx", status=status)
+    assert c.post("/jobs/jx/cancel").status_code == 409
+
+
+def test_cancel_unknown_is_404(client):
+    c, _ = client
+    assert c.post("/jobs/nope/cancel").status_code == 404
 
 
 def test_failed_returns_error_envelope(client):
