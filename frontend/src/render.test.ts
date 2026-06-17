@@ -1,5 +1,37 @@
 import { describe, it, expect } from "vitest"
-import { humanDuration, humanBytes, humanBitrate } from "./render"
+import { humanDuration, humanBytes, humanBitrate, relativeTime, expiresIn } from "./render"
+
+const NOW = Date.parse("2026-06-17T12:00:00Z")
+
+describe("relativeTime", () => {
+  it("buckets recent times", () => {
+    expect(relativeTime("2026-06-17T11:59:30Z", NOW)).toBe("just now")
+    expect(relativeTime("2026-06-17T11:30:00Z", NOW)).toBe("30m ago")
+    expect(relativeTime("2026-06-17T09:00:00Z", NOW)).toBe("3h ago")
+    expect(relativeTime("2026-06-15T12:00:00Z", NOW)).toBe("2d ago")
+  })
+  it("falls back to a date past a week", () => {
+    expect(relativeTime("2026-05-01T12:00:00Z", NOW)).toMatch(/May/)
+  })
+  it("returns empty for null/garbage", () => {
+    expect(relativeTime(null, NOW)).toBe("")
+    expect(relativeTime("not-a-date", NOW)).toBe("")
+  })
+})
+
+describe("expiresIn", () => {
+  it("counts down in days and hours", () => {
+    expect(expiresIn("2026-06-19T12:00:00Z", NOW)).toBe("expires in 2d")
+    expect(expiresIn("2026-06-17T17:00:00Z", NOW)).toBe("expires in 5h")
+  })
+  it("says soon under an hour and expired in the past", () => {
+    expect(expiresIn("2026-06-17T12:30:00Z", NOW)).toBe("expires soon")
+    expect(expiresIn("2026-06-16T12:00:00Z", NOW)).toBe("expired")
+  })
+  it("returns empty for null", () => {
+    expect(expiresIn(null, NOW)).toBe("")
+  })
+})
 
 describe("humanDuration", () => {
   it("formats m:ss and h:mm:ss", () => {

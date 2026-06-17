@@ -1,7 +1,7 @@
 import { getJob, postTranscode, postCancel, ApiError, apiBase, type JobResponse, type JobError, type JobResults } from "./api"
 import { watch, type StateFrame } from "./live"
 import { mountPlayer, type PlayerHandle } from "./player"
-import { esc, humanDuration, humanBitrate } from "./render"
+import { esc, humanDuration, humanBitrate, siteHeader } from "./render"
 import { buildPicker, estimateSeconds, type PickerRow } from "./presets"
 
 // Phase 5.4/5.5 — inspect/commit, then live progress and the player.
@@ -211,7 +211,7 @@ function setView(next: View): void {
 function render(): void {
   if (player) { player.destroy(); player = null }
   appEl.innerHTML = `
-    <header class="site-header"><a href="/" class="wordmark">tideo</a></header>
+    ${siteHeader()}
     <main class="job-main">${card()}</main>
   `
   bind()

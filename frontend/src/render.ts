@@ -26,3 +26,35 @@ export function humanBitrate(bps: number | null): string {
   if (bps < 1_000_000) return `${Math.round(bps / 1000)} kbps`
   return `${(bps / 1_000_000).toFixed(1)} Mbps`
 }
+
+const DAY = 86_400_000
+
+export function relativeTime(iso: string | null, now: number = Date.now()): string {
+  if (!iso) return ""
+  const t = Date.parse(iso)
+  if (Number.isNaN(t)) return ""
+  const diff = now - t
+  if (diff < 60_000) return "just now"
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`
+  if (diff < DAY) return `${Math.floor(diff / 3_600_000)}h ago`
+  if (diff < 7 * DAY) return `${Math.floor(diff / DAY)}d ago`
+  return new Date(t).toLocaleDateString(undefined, { month: "short", day: "numeric" })
+}
+
+export function expiresIn(iso: string | null, now: number = Date.now()): string {
+  if (!iso) return ""
+  const t = Date.parse(iso)
+  if (Number.isNaN(t)) return ""
+  const diff = t - now
+  if (diff <= 0) return "expired"
+  if (diff < 3_600_000) return "expires soon"
+  if (diff < DAY) return `expires in ${Math.floor(diff / 3_600_000)}h`
+  return `expires in ${Math.floor(diff / DAY)}d`
+}
+
+export function siteHeader(): string {
+  return `<header class="site-header">
+    <a href="/" class="wordmark">tideo</a>
+    <nav class="site-nav"><a href="/history" class="site-nav-link">History</a></nav>
+  </header>`
+}

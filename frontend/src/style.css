@@ -524,3 +524,91 @@ body.drag-active .upload-zone {
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition-duration: 0ms !important; animation-duration: 0ms !important; }
 }
+
+/* ---- Site nav ------------------------------------------------------------- */
+
+.site-header { justify-content: space-between; }
+.site-nav-link {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-dim);
+  text-decoration: none;
+  transition: color var(--transition);
+}
+.site-nav-link:hover { color: var(--text); }
+
+/* ---- History screen ------------------------------------------------------- */
+
+.hist-main {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: var(--sp-7) var(--sp-5);
+}
+.hist-title {
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  margin-bottom: var(--sp-5);
+}
+.hist-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: var(--sp-4);
+}
+.hist-card {
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  overflow: hidden;
+  text-decoration: none;
+  color: var(--text);
+  transition: border-color var(--transition), transform var(--transition);
+}
+.hist-card:hover { border-color: var(--border-focus); transform: translateY(-2px); }
+.hist-card--sk { pointer-events: none; }
+.hist-poster {
+  aspect-ratio: 16 / 9;
+  width: 100%;
+  object-fit: cover;
+  background: var(--surface-2);
+  display: block;
+}
+.hist-poster--empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-xdim);
+}
+.hist-meta { padding: var(--sp-3); display: flex; flex-direction: column; gap: var(--sp-1); }
+.hist-top { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2); }
+.hist-name {
+  font-size: 14px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.hist-sub { font-size: 12px; color: var(--text-dim); }
+.hist-exp { font-size: 11px; color: var(--text-xdim); }
+
+/* status badges: colour AND a text label, so they read without relying on hue */
+.hist-badge { cursor: default; }
+.hist-badge--done      { background: color-mix(in srgb, var(--success) 18%, transparent); color: var(--success); }
+.hist-badge--failed    { background: color-mix(in srgb, var(--danger) 18%, transparent);  color: var(--danger); }
+.hist-badge--cancelled { background: var(--surface-3); color: var(--text-dim); }
+.hist-badge--expired   { background: color-mix(in srgb, var(--warning) 16%, transparent); color: var(--warning); }
+
+.hist-more { margin: var(--sp-5) auto 0; display: block; }
+
+.hist-empty {
+  text-align: center;
+  padding: var(--sp-8) var(--sp-5);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sp-3);
+}
+.hist-empty-head { font-size: 18px; font-weight: 600; }
+.hist-empty-sub { font-size: 14px; color: var(--text-dim); margin-bottom: var(--sp-2); }

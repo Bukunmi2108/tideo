@@ -62,6 +62,24 @@ export interface JobResponse {
   error?: JobError
 }
 
+export interface JobSummary {
+  job_id: string
+  status: JobStatus
+  source_filename: string | null
+  duration: number | null
+  created_at: string | null
+  finished_at: string | null
+  expires_at: string | null
+  poster: string | null
+}
+
+export interface JobListResponse {
+  items: JobSummary[]
+  limit: number
+  offset: number
+  has_more: boolean
+}
+
 export interface UploadResponse {
   job_id: string
   status: string
@@ -102,6 +120,18 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export function getJob(jobId: string): Promise<JobResponse> {
   return request<JobResponse>(`/jobs/${jobId}`)
+}
+
+export function listJobs(
+  opts: { status?: string; limit?: number; offset?: number } = {},
+  signal?: AbortSignal,
+): Promise<JobListResponse> {
+  const q = new URLSearchParams()
+  if (opts.status) q.set("status", opts.status)
+  if (opts.limit != null) q.set("limit", String(opts.limit))
+  if (opts.offset != null) q.set("offset", String(opts.offset))
+  const qs = q.toString()
+  return request<JobListResponse>(`/jobs${qs ? `?${qs}` : ""}`, { signal })
 }
 
 export function postTranscode(jobId: string, body: TranscodeRequest): Promise<{ job_id: string; status: string }> {
