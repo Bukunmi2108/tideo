@@ -25,8 +25,10 @@ CREATE TABLE IF NOT EXISTS jobs (
     status           TEXT NOT NULL CHECK (status IN ('done','failed','cancelled','expired')),
     error_code       TEXT, error_message TEXT, error_stage TEXT,
     created_at       TIMESTAMPTZ NOT NULL,
-    started_at       TIMESTAMPTZ, finished_at TIMESTAMPTZ, expired_at TIMESTAMPTZ
+    started_at       TIMESTAMPTZ, finished_at TIMESTAMPTZ, expired_at TIMESTAMPTZ,
+    subtitles        JSONB
 );
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS subtitles JSONB;
 CREATE INDEX IF NOT EXISTS jobs_status_created ON jobs (status, created_at DESC);
 CREATE INDEX IF NOT EXISTS jobs_content_hash   ON jobs (content_hash);
 
@@ -50,13 +52,13 @@ INSERT INTO jobs (
     source_container, source_video_codec, source_audio_codec,
     source_width, source_height, source_duration_s, source_bitrate,
     presets, status, error_code, error_message, error_stage,
-    created_at, started_at, finished_at, expired_at
+    created_at, started_at, finished_at, expired_at, subtitles
 ) VALUES (
     %(job_id)s, %(content_hash)s, %(source_filename)s,
     %(source_container)s, %(source_video_codec)s, %(source_audio_codec)s,
     %(source_width)s, %(source_height)s, %(source_duration_s)s, %(source_bitrate)s,
     %(presets)s, %(status)s, %(error_code)s, %(error_message)s, %(error_stage)s,
-    %(created_at)s, %(started_at)s, %(finished_at)s, %(expired_at)s
+    %(created_at)s, %(started_at)s, %(finished_at)s, %(expired_at)s, %(subtitles)s
 )
 ON CONFLICT (job_id) DO UPDATE SET
     status = EXCLUDED.status, expired_at = EXCLUDED.expired_at
@@ -104,6 +106,7 @@ def job_row(job_id: str, rec: dict, *, finished_at: str, expired_at: str | None 
         "started_at": rec.get("started_at") or None,
         "finished_at": finished_at,
         "expired_at": expired_at,
+        "subtitles": Json(_safe_loads(rec.get("subtitles"))) if rec.get("subtitles") else None,
     }
 
 
@@ -215,6 +218,26 @@ def mark_expired(job_id: str, expired_at) -> bool:
             won = cur.rowcount > 0
         conn.commit()
         return won
+    finally:
+        conn.close()
+
+
+def update_subtitles(job_id: str, payload: dict) -> None:
+    """Patch the subtitles status on an already-persisted terminal row. Transcription routinely outlives
+    the ladder, so this lands after persist_terminal. Fail-OPEN: a blip must not crash the transcribe
+    task; the hot Redis hash still carries the status within its TTL. No-op if the row isn't written yet."""
+    try:
+        conn = psycopg2.connect(config.postgres_dsn)
+    except _TRANSIENT:
+        log.error("update_subtitles_skipped", reason="postgres_unavailable")
+        return
+    try:
+        with conn.cursor() as cur:
+            cur.execute("UPDATE jobs SET subtitles = %s WHERE job_id = %s", (Json(payload), job_id))
+        conn.commit()
+    except psycopg2.Error:
+        conn.rollback()
+        log.error("update_subtitles_failed", exc_info=True)
     finally:
         conn.close()
 

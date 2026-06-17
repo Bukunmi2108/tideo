@@ -41,6 +41,11 @@ class Config(BaseSettings):
 
     stt_provider: Literal["local", "openai"] = "local"
     stt_rate_limit: str = "3/60"
+    stt_model: str = "base"
+    stt_compute_type: str = "int8"
+    stt_max_retries: int = 3
+    openai_api_key: str = ""
+    stt_api_base: str = "https://api.openai.com/v1"
 
     admin_token: str = Field(min_length=1)
     profile: Literal["dev", "deploy"] = "dev"

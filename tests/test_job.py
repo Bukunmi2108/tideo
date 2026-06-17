@@ -151,6 +151,7 @@ def test_done_returns_results_urls(client):
         "player": "/jobs/j4/player",
         "presets": ["720p", "480p"],
         "duration": 120.5,
+        "subtitles": None,
     }
 
 

@@ -5,7 +5,7 @@ from redis.exceptions import RedisError
 from app.api.utils import now_iso
 from app.core.config import config
 from app.core.logging import bind_job, clear_log_context, configure_logging, get_logger
-from app.dispatcher.dispatch import build_and_fire_chord
+from app.dispatcher.dispatch import build_and_fire_chord, maybe_dispatch_transcribe
 from app.dispatcher.guard import claim, release
 from app.dispatcher.handler import BadEvent, parse_event, process
 from app.events.topics import TOPIC
@@ -23,6 +23,7 @@ def _heartbeat():
 
 def _enqueue(env: dict):
     build_and_fire_chord(env["job_id"], env["payload"]["presets"])
+    maybe_dispatch_transcribe(env["job_id"], env["payload"].get("subtitles", False))
 
 def run():
     signal.signal(signal.SIGTERM, _stop)

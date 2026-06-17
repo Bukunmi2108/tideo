@@ -13,12 +13,14 @@ from app.events.topics import JOB_FAILED
 from app.storage.db import persist_terminal
 from app.storage.state import get_sync_client, write_status
 from app.workers import dlq
+from app.workers.source import claim_source
 from app.workers.celery_app import app as celery_app
 
 log = get_logger()
 
 RENDITION = "app.workers.tasks.rendition.rendition"
 PACKAGE = "app.workers.tasks.package.package"
+TRANSCRIBE = "app.workers.tasks.transcribe.transcribe"
 
 
 def build_and_fire_chord(job_id: str, presets: list[str]) -> None:
@@ -43,7 +45,22 @@ def build_and_fire_chord(job_id: str, presets: list[str]) -> None:
         "chord_callback_id": result.id,
         "rendition_ids": json.dumps(header_ids),
     })
+    claim_source(r, job_id, "package")          # package reads the source for web.mp4
     log.info("job_dispatched", presets=presets, callback_id=result.id)
+
+
+def maybe_dispatch_transcribe(job_id: str, subtitles: bool) -> None:
+    """ADR-4: when subtitles were requested, fire the transcribe task ALONGSIDE the chord, not in it —
+    no link_error, no chord membership. Marks subtitles 'processing' so the result is never silent."""
+    if not subtitles:
+        return
+    r = get_sync_client()
+    rec = r.hgetall(f"job:{job_id}")
+    meta = json.loads(rec["source_meta"])
+    r.hset(f"job:{job_id}", mapping={"subtitles": json.dumps({"status": "processing"})})
+    claim_source(r, job_id, "transcribe")       # transcribe reads the source to extract audio
+    celery_app.signature(TRANSCRIBE, args=[job_id, rec["source_path"], meta]).apply_async()
+    log.info("transcribe_dispatched")
 
 
 @celery_app.task(name="app.dispatcher.dispatch.fail_job")

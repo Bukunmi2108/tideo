@@ -231,3 +231,35 @@ def test_unknown_preset_on_segment_is_404(monkeypatch, tmp_path):
     _seed_job(tmp_path)
     c = _client(monkeypatch, tmp_path=tmp_path)
     assert c.get("/jobs/j1/segments/4k/seg_00000.ts").status_code == 404
+
+
+# ---------- subtitle routes (Phase 9) ----------
+
+def test_subtitles_served_as_vtt_when_present(monkeypatch, tmp_path):
+    _seed_job(tmp_path)
+    (tmp_path / "subtitles.vtt").write_text("WEBVTT\n\n1\n00:00:00.000 --> 00:00:01.000\nhi\n")
+    c = _client(monkeypatch, tmp_path=tmp_path)
+    r = c.get("/jobs/j1/subtitles")
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("text/vtt")
+    assert "WEBVTT" in r.text
+
+
+def test_subtitle_media_playlist_served_when_present(monkeypatch, tmp_path):
+    _seed_job(tmp_path)
+    (tmp_path / "subs.m3u8").write_text("#EXTM3U\n#EXT-X-ENDLIST\n")
+    c = _client(monkeypatch, tmp_path=tmp_path)
+    r = c.get("/jobs/j1/playlist/subs")
+    assert r.status_code == 200 and "#EXTM3U" in r.text
+
+
+def test_subtitles_404_when_absent_on_done_job(monkeypatch, tmp_path):
+    _seed_job(tmp_path)                                  # done, but no subtitles.vtt (e.g. no audio / not requested)
+    c = _client(monkeypatch, tmp_path=tmp_path)
+    assert c.get("/jobs/j1/subtitles").status_code == 404
+    assert c.get("/jobs/j1/playlist/subs").status_code == 404
+
+
+def test_subtitles_410_when_expired(monkeypatch):
+    c = _client(monkeypatch, status="expired")
+    assert c.get("/jobs/j1/subtitles").status_code == 410

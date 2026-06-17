@@ -219,3 +219,66 @@ def test_persist_terminal_self_heals_missing_tables(monkeypatch):
     assert conn.healed                        # ensure_schema ran (DDL executed)
     assert conn.rolled_back == 1              # aborted txn rolled back before retry
     assert conn.executed.count(JOBS_UPSERT) == 2   # failed once, retried after creating the schema
+
+
+# ---------- update_subtitles: fail-open patch of the terminal row ----------
+
+class _SubsCursor:
+    def __init__(self, conn):
+        self.conn = conn
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def execute(self, sql, params=None):
+        self.conn.executed.append((sql, params))
+        if self.conn.fail is not None:
+            raise self.conn.fail
+
+
+class _SubsConn:
+    def __init__(self, fail=None):
+        self.fail = fail
+        self.executed = []
+        self.commits = 0
+        self.rolled_back = 0
+        self.closed = False
+
+    def cursor(self):
+        return _SubsCursor(self)
+
+    def commit(self):
+        self.commits += 1
+
+    def rollback(self):
+        self.rolled_back += 1
+
+    def close(self):
+        self.closed = True
+
+
+def test_update_subtitles_writes_and_commits(monkeypatch):
+    conn = _SubsConn()
+    monkeypatch.setattr(db.psycopg2, "connect", lambda dsn: conn)
+    db.update_subtitles("j1", {"status": "ready", "url": "/jobs/j1/subtitles"})
+    assert conn.commits == 1 and conn.closed
+    sql, params = conn.executed[0]
+    assert "UPDATE jobs SET subtitles" in sql and params[1] == "j1"
+
+
+def test_update_subtitles_swallows_transient_outage(monkeypatch):
+    import psycopg2
+    monkeypatch.setattr(db.psycopg2, "connect",
+                        lambda dsn: (_ for _ in ()).throw(psycopg2.OperationalError("down")))
+    db.update_subtitles("j1", {"status": "ready"})   # fail-open: must NOT raise (job already done)
+
+
+def test_update_subtitles_rolls_back_on_query_error(monkeypatch):
+    import psycopg2
+    conn = _SubsConn(fail=psycopg2.ProgrammingError("bad SQL"))
+    monkeypatch.setattr(db.psycopg2, "connect", lambda dsn: conn)
+    db.update_subtitles("j1", {"status": "failed"})   # logged, swallowed
+    assert conn.rolled_back == 1 and conn.closed

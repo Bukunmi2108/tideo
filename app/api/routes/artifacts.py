@@ -20,6 +20,7 @@ TS_MIME   = "video/mp2t"
 MP4_MIME  = "video/mp4"
 JPEG_MIME = "image/jpeg"
 HTML_MIME = "text/html"
+VTT_MIME  = "text/vtt"
 
 NO_CACHE  = "no-cache"
 IMMUTABLE = "max-age=31536000, immutable"
@@ -71,6 +72,24 @@ async def master_playlist(job_id: str):
     job_dir = await _guard(job_id)
     content = (job_dir / "master.m3u8").read_text()
     return Response(content, media_type=HLS_MIME, headers={"Cache-Control": NO_CACHE})
+
+
+@router.get("/jobs/{job_id}/playlist/subs")
+async def subtitle_playlist(job_id: str):
+    job_dir = await _guard(job_id)
+    path = job_dir / "subs.m3u8"
+    if not path.exists():
+        raise ApiError(404, "NOT_READY", "subtitles not available", job_id)
+    return Response(path.read_text(), media_type=HLS_MIME, headers={"Cache-Control": NO_CACHE})
+
+
+@router.get("/jobs/{job_id}/subtitles")
+async def subtitles(job_id: str):
+    job_dir = await _guard(job_id)
+    path = job_dir / "subtitles.vtt"
+    if not path.exists():
+        raise ApiError(404, "NOT_READY", "subtitles not available", job_id)
+    return FileResponse(str(path), media_type=VTT_MIME, headers={"Cache-Control": NO_CACHE})
 
 
 @router.get("/jobs/{job_id}/playlist/{preset}")

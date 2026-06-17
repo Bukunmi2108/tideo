@@ -147,7 +147,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.worker
-    command: celery -q -A app.workers.celery_app worker -Q inspect,package,transcribe,cleanup --concurrency=4 --prefetch-multiplier=4 -n fast@%h --loglevel=info
+    command: celery -q -A app.workers.celery_app worker -Q inspect,package,cleanup --concurrency=4 --prefetch-multiplier=4 -n fast@%h --loglevel=info
     volumes:
       - .:/app
       - data:/data
@@ -155,6 +155,33 @@ services:
       - .env
     healthcheck:
       test: ["CMD-SHELL", "celery -A app.workers.celery_app inspect ping -d fast@$$(hostname)"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
+    depends_on:
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - tideo-net
+
+  worker-transcribe:
+    container_name: tideo_worker_transcribe
+    restart: unless-stopped
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    # STT is CPU-bound (local whisper) — isolated from the encoders' lane so it scales independently.
+    command: celery -q -A app.workers.celery_app worker -Q transcribe --concurrency=2 --prefetch-multiplier=1 -n transcribe@%h --loglevel=info
+    volumes:
+      - .:/app
+      - data:/data
+    env_file:
+      - .env
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.workers.celery_app inspect ping -d transcribe@$$(hostname)"]
       interval: 30s
       timeout: 10s
       retries: 5

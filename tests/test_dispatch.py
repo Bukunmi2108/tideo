@@ -7,6 +7,7 @@ class FakeRedis:
     def __init__(self, hash_):
         self.hashes = {"job:j1": dict(hash_)}
         self.kv = {}
+        self.sets = {}
         self.published = []
 
     def publish(self, channel, message):
@@ -24,6 +25,18 @@ class FakeRedis:
 
     def hincrby(self, k, f, n):
         return None
+
+    def sadd(self, k, *vals):
+        self.sets.setdefault(k, set()).update(vals)
+
+    def srem(self, k, *vals):
+        self.sets.setdefault(k, set()).difference_update(vals)
+
+    def scard(self, k):
+        return len(self.sets.get(k, set()))
+
+    def delete(self, k):
+        self.sets.pop(k, None)
 
     def set(self, k, v, nx=False, ex=None):
         if nx and k in self.kv:
@@ -66,6 +79,35 @@ def test_chord_caps_to_dev_max_renditions(monkeypatch):
     assert captured["header_len"] == 2                       # renditions only, capped to dev_max
     assert fake.hashes["job:j1"]["chord_callback_id"] == "cb-1"
     assert json.loads(fake.hashes["job:j1"]["rendition_ids"]) == ["r0", "r1"]
+
+
+# ---------- maybe_dispatch_transcribe (ADR-4: alongside, not in, the chord) ----------
+
+def test_transcribe_dispatched_alongside_and_marked_processing(monkeypatch):
+    fake = FakeRedis({"source_path": "/u/s.mp4", "source_meta": SRC_META})
+    monkeypatch.setattr(dispatch, "get_sync_client", lambda: fake)
+    fired = []
+
+    class Sig:
+        def apply_async(self):
+            fired.append("async")
+
+    monkeypatch.setattr(dispatch.celery_app, "signature",
+                        lambda name, args=None: fired.append((name, args)) or Sig())
+
+    dispatch.maybe_dispatch_transcribe("j1", True)
+    assert json.loads(fake.hashes["job:j1"]["subtitles"]) == {"status": "processing"}
+    assert fired[0] == ("app.workers.tasks.transcribe.transcribe", ["j1", "/u/s.mp4", json.loads(SRC_META)])
+    assert "async" in fired                                   # actually enqueued
+
+
+def test_no_transcribe_when_subtitles_not_requested(monkeypatch):
+    fake = FakeRedis({"source_path": "/u/s.mp4", "source_meta": SRC_META})
+    monkeypatch.setattr(dispatch, "get_sync_client", lambda: fake)
+    monkeypatch.setattr(dispatch.celery_app, "signature",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not dispatch")))
+    dispatch.maybe_dispatch_transcribe("j1", False)
+    assert "subtitles" not in fake.hashes["job:j1"]
 
 
 # ---------- fail_job (link_error handler) ----------

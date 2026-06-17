@@ -21,15 +21,40 @@ class Variant:
     height: int
     codecs: str
 
-def build_master(variants: list[Variant]) -> str:
+SUBS_GROUP = "subs"
+
+
+def build_master(variants: list[Variant], *, has_subtitles: bool = False) -> str:
     lines = ["#EXTM3U", "#EXT-X-VERSION:6"]
+    if has_subtitles:
+        lines.append(
+            f'#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="{SUBS_GROUP}",NAME="English",'
+            f'DEFAULT=YES,AUTOSELECT=YES,LANGUAGE="en",URI="playlist/subs"'
+        )
+    subs_attr = f',SUBTITLES="{SUBS_GROUP}"' if has_subtitles else ""
     for v in sorted(variants, key=lambda x: x.bandwidth, reverse=True):
         lines.append(
             f'#EXT-X-STREAM-INF:BANDWIDTH={v.bandwidth},'
-            f'RESOLUTION={v.width}x{v.height},CODECS="{v.codecs}"'
+            f'RESOLUTION={v.width}x{v.height},CODECS="{v.codecs}"{subs_attr}'
         )
         lines.append(f"playlist/{v.preset}")
     return "\n".join(lines) + "\n"
+
+
+def build_subtitle_media_playlist(duration: float) -> str:
+    """A one-cue VOD media playlist wrapping subtitles.vtt — some players reject a bare VTT URI.
+    Served at /jobs/{id}/playlist/subs; the `../subtitles` ref resolves to /jobs/{id}/subtitles."""
+    target = max(1, int(duration) + 1)
+    return "\n".join([
+        "#EXTM3U",
+        "#EXT-X-VERSION:6",
+        f"#EXT-X-TARGETDURATION:{target}",
+        "#EXT-X-MEDIA-SEQUENCE:0",
+        "#EXT-X-PLAYLIST-TYPE:VOD",
+        f"#EXTINF:{duration:.3f},",
+        "../subtitles",
+        "#EXT-X-ENDLIST",
+    ]) + "\n"
 
 def build_manifest(job_id: str, duration: float, variants: list[Variant],
                    *, web_remuxed: bool, created_at: str | None) -> dict:

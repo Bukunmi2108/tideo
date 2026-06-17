@@ -1,12 +1,11 @@
 import json
-import shutil
 import subprocess
 from html import escape
 from typing import cast
 from app.core.config import config
 from app.core.logging import bind_job, get_logger
 from app.domain.ladder import PRESETS
-from app.domain.playlist import Variant, avc1_codec, bandwidth, build_manifest, build_master
+from app.domain.playlist import Variant, avc1_codec, bandwidth, build_manifest
 from app.domain.state import transition
 from app.events.producer import emit
 from app.events.topics import JOB_COMPLETED
@@ -15,6 +14,8 @@ from app.storage.db import persist_terminal
 from app.storage.state import get_sync_client, write_status
 from app.workers.base import PackageTask
 from app.workers.celery_app import app
+from app.workers.source import release_source
+from app.workers.subtitles import refresh_master
 from app.workers.tasks.thumbs import write_poster, write_sprite
 
 log = get_logger()
@@ -81,7 +82,6 @@ def package(results, job_id: str) -> dict:
 
     renditions = [res for res in results if "preset" in res]   # thumbs result has no "preset"
     variants = [_variant(str(job_dir), res["preset"], res["output_bytes"], duration) for res in renditions]
-    (job_dir / "master.m3u8").write_text(build_master(variants))
 
     top = _highest([v.preset for v in variants])
     remuxed = _web_mp4(cast(str, rec["source_path"]), str(job_dir / "web.mp4"),
@@ -95,6 +95,10 @@ def package(results, job_id: str) -> dict:
     manifest = build_manifest(job_id, duration, variants,
                               web_remuxed=remuxed, created_at=cast(str, rec.get("created_at")))
     (job_dir / "manifest.json").write_text(json.dumps(manifest, indent=2))
+
+    # master last, via the shared writer: includes the subtitles track iff transcription already landed
+    # the VTT (it runs alongside the ladder). If it lands later, the transcribe task rewrites master then.
+    refresh_master(job_dir, variants, duration)
 
     name = escape(cast(str, rec.get("source_filename", "")))  # filename is user input -> escape it
     # "playlist" is relative to /jobs/{id}/player -> resolves to /jobs/{id}/playlist
@@ -113,12 +117,7 @@ def package(results, job_id: str) -> dict:
         })
         r.expire(f"job:{job_id}", config.output_ttl_days * 86400)   # hot state yields to Postgres after the window
         persist_terminal(job_id, r.hgetall(f"job:{job_id}"), results=results)
-        try:
-            shutil.rmtree(config.uploads_dir / job_id)   # source done its job; reclaim it now
-        except FileNotFoundError:
-            pass
-        except OSError:
-            log.warning("source_reclaim_failed", scope="package")
+        release_source(r, job_id, "package")   # reclaim the upload once transcribe is also done with it
         emit(JOB_COMPLETED, job_id, {
             "renditions": len(variants),
             "output_bytes_total": sum(res.get("output_bytes", 0) for res in results),

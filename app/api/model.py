@@ -41,8 +41,9 @@ def _safe_loads(raw: str | None, field: str, job_id: str):
         return None
 
 
-def _results_payload(job_id: str, presets: list, duration) -> dict:
-    """Artifact URL set for a `done` job, by route convention. No disk read."""
+def _results_payload(job_id: str, presets: list, duration, subtitles=None) -> dict:
+    """Artifact URL set for a `done` job, by route convention. No disk read.
+    `subtitles` is the {status,...} the transcribe task records (None if captions weren't requested)."""
     return {
         "playlist": f"/jobs/{job_id}/playlist",
         "web_mp4": f"/jobs/{job_id}/file",
@@ -51,6 +52,7 @@ def _results_payload(job_id: str, presets: list, duration) -> dict:
         "player": f"/jobs/{job_id}/player",
         "presets": presets,
         "duration": duration,
+        "subtitles": subtitles,
     }
 
 
@@ -59,14 +61,16 @@ def results_view(job_id: str, rec: dict) -> dict:
     presets = _safe_loads(rec.get("presets"), "presets", job_id) or []
     sm = _safe_loads(rec.get("source_meta"), "source_meta", job_id)
     duration = sm.get("duration") if isinstance(sm, dict) else None
-    return _results_payload(job_id, presets, duration)
+    return _results_payload(job_id, presets, duration,
+                            _safe_loads(rec.get("subtitles"), "subtitles", job_id))
 
 
 def results_view_pg(job_id: str, row: dict) -> dict:
-    """From a cold Postgres row (presets already a list; duration a NUMERIC -> float)."""
+    """From a cold Postgres row (presets already a list; duration a NUMERIC -> float; subtitles a JSONB dict)."""
     duration = row.get("source_duration_s")
     return _results_payload(job_id, row.get("presets") or [],
-                            float(duration) if duration is not None else None)
+                            float(duration) if duration is not None else None,
+                            row.get("subtitles"))
 
 
 class JobSummary(BaseModel):
