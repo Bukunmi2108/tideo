@@ -99,10 +99,9 @@ async def get_job(job_id: str):
     if status == "expired":
         raise ApiError(410, "JOB_EXPIRED", "job outputs have expired", job_id=job_id)
 
-    resp = {"job_id": job_id, "status": status}
+    resp = {"job_id": job_id, "status": status, "source_filename": rec.get("source_filename") or None}
     if status == "awaiting_choice":
         resp["source"] = json.loads(rec["source_meta"])
-        resp["source_filename"] = rec.get("source_filename") or None
         resp["recommended_presets"] = json.loads(rec["recommended_presets"])
         resp["web_safe"] = rec["web_safe"] == "true"
         resp["web_safe_reason"] = rec.get("web_safe_reason") or None

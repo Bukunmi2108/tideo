@@ -69,7 +69,13 @@ export function siteHeader(): string {
   const path = typeof location !== "undefined" ? location.pathname : "/";
   const here = (p: string) => (path === p ? ' aria-current="page"' : "");
   return `<header class="site-header">
-    <a href="/" class="wordmark">tideo</a>
+    <a href="/" class="wordmark">
+      <svg class="wordmark-mark" width="20" height="18" viewBox="0 0 20 18" aria-hidden="true">
+        <rect x="0.5" y="11" width="3" height="7" rx="1.5" />
+        <rect x="6" y="7.5" width="3" height="10.5" rx="1.5" />
+        <rect x="11.5" y="4" width="3" height="14" rx="1.5" />
+        <rect x="17" y="0.5" width="3" height="17.5" rx="1.5" />
+      </svg>tideo</a>
     <nav class="site-nav">
       <a href="/upload"${here("/upload")} class="site-nav-link">Upload</a>
       <a href="/history"${here("/history")} class="site-nav-link">Library</a>

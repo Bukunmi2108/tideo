@@ -515,7 +515,7 @@ function cardDone(results: JobResults): string {
           <p class="watch-eyebrow">Now playing</p>
           <h1 class="watch-title">${title}</h1>
         </div>
-        <a class="watch-scroll" href="#watch-detail" aria-label="See details">details ↓</a>
+        <button class="watch-scroll" id="watch-scroll" type="button" aria-label="See details">details ↓</button>
       </section>
       <section class="watch-detail" id="watch-detail">
         <div class="watch-detail-inner">
@@ -656,6 +656,13 @@ function bind(): void {
 function mountDonePlayer(results: JobResults): void {
   const mount = document.getElementById("player-mount");
   if (!mount || !jobId) return;
+  document
+    .getElementById("watch-scroll")
+    ?.addEventListener("click", () =>
+      document
+        .getElementById("watch-detail")
+        ?.scrollIntoView({ behavior: "smooth", block: "start" }),
+    );
   const base = apiBase();
   const id = jobId;
   const myGen = gen;
