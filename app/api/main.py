@@ -8,6 +8,7 @@ from app.api.routes import upload, job, artifacts
 from app.core.config import config
 from app.events.admin import ensure_topics
 from app.events.producer import flush_producer
+from app.api import ws as ws_module
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +26,7 @@ app = FastAPI(title="Tideo", version="0.0.1", lifespan=lifespan)
 app.include_router(upload.router)
 app.include_router(job.router)
 app.include_router(artifacts.router)
+app.include_router(ws_module.router)
 
 # (name, host, port) for every dependency /readyz probes.
 DEPENDENCIES = [
