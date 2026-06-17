@@ -3,6 +3,7 @@ from dataclasses import asdict
 from app.core.config import config
 from app.domain import recommend
 from app.domain.state import transition
+from app.core.logging import bind_job
 from app.storage.db import persist_terminal
 from app.storage.state import get_sync_client
 from app.workers import ffprobe
@@ -20,6 +21,7 @@ def _current_status(r, job_id: str) -> str:
 
 @app.task(base=InspectTask)
 def probe(job_id: str, src: str) -> dict:
+    bind_job(job_id)
     r = get_sync_client()
     try:
         meta = ffprobe.probe(src)

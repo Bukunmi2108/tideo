@@ -8,6 +8,7 @@ from app.api.errors import ApiError
 from app.api.routes import upload, job, artifacts, admin
 from app.core.config import config
 from psycopg2 import InterfaceError, OperationalError
+from app.core.logging import configure_logging
 from app.events.admin import ensure_topics
 from app.events.producer import flush_producer
 from app.storage.db import init_schema
@@ -18,6 +19,7 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    configure_logging("api")                     # after uvicorn's own setup, so the JSON formatter wins
     ensure_topics()
     init_schema()
     yield

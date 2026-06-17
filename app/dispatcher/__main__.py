@@ -4,6 +4,7 @@ from kombu.exceptions import OperationalError
 from redis.exceptions import RedisError
 from app.api.utils import now_iso
 from app.core.config import config
+from app.core.logging import bind_job, clear_log_context, configure_logging
 from app.dispatcher.dispatch import build_and_fire_chord
 from app.dispatcher.guard import claim, release
 from app.dispatcher.handler import BadEvent, parse_event, process
@@ -36,6 +37,7 @@ def run():
     poison = 0
     try:
         while _running:
+            clear_log_context()                  # each event starts with a clean binding
             msg = consumer.poll(1.0)
             _heartbeat()
             if msg is None:
@@ -53,6 +55,7 @@ def run():
                 consumer.commit(message=msg, asynchronous=False)
                 continue
 
+            bind_job(env["job_id"])              # every line below carries this job_id
             try:
                 action = process(env, claim=claim, enqueue=_enqueue, release=release)
             except (RedisError, OperationalError) as e:
@@ -72,5 +75,5 @@ def run():
         logger.info("dispatcher stopped (poison=%d)", poison)
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
+    configure_logging("dispatcher")
     run()

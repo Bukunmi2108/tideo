@@ -3,6 +3,7 @@ from collections import deque
 from datetime import datetime, timezone
 from typing import NoReturn, cast
 from celery.exceptions import Ignore, SoftTimeLimitExceeded
+from app.core.logging import bind_job
 from app.domain.errors import TideoError, classify, make_error, ENCODE_TIMEOUT, TRANSCODE
 from app.domain.state import transition
 from app.events.producer import emit
@@ -125,6 +126,7 @@ def _encode(argv, *, duration, on_pct, cancelled):
 
 @app.task(bind=True, base=TranscodeTask)
 def rendition(self, job_id: str, preset_name: str, src: str, meta: dict) -> dict:
+    bind_job(job_id)
     m = SourceMeta(**meta)
     preset = PRESETS[preset_name]
     emit(RENDITION_STARTED, job_id, {"preset": preset_name})

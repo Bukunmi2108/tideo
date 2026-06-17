@@ -6,6 +6,7 @@ from confluent_kafka import Consumer
 from psycopg2.extras import Json
 
 from app.core.config import config
+from app.core.logging import bind_job, clear_log_context, configure_logging
 from app.dispatcher.handler import BadEvent, parse_event
 from app.events.topics import TOPIC
 
@@ -91,6 +92,7 @@ def run():
     poison = 0
     try:
         while _running:
+            clear_log_context()
             msg = consumer.poll(1.0)
             if msg is None:
                 continue
@@ -105,6 +107,7 @@ def run():
                 consumer.commit(message=msg, asynchronous=False)
                 continue
 
+            bind_job(env["job_id"])
             try:
                 result = store_event(conn, env)
             except _TRANSIENT:
@@ -126,5 +129,5 @@ def run():
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
+    configure_logging("audit")
     run()

@@ -1,12 +1,24 @@
 import subprocess
 import logging
-from celery.signals import worker_ready
+from celery.signals import setup_logging, task_postrun, worker_ready
 from kombu.exceptions import OperationalError
 from redis.exceptions import RedisError
+from app.core.logging import clear_log_context, configure_logging
 from app.storage.db import init_schema
 from app.workers import routing
 
 logger = logging.getLogger(__name__)
+
+
+@setup_logging.connect
+def _configure_worker_logging(**_):
+    # connecting this signal stops Celery installing its own handlers — we own the format instead
+    configure_logging("worker")
+
+
+@task_postrun.connect
+def _clear_job_context(**_):
+    clear_log_context()                          # prefork reuses processes; don't let job_id bleed across tasks
 
 
 @worker_ready.connect

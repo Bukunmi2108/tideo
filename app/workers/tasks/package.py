@@ -5,6 +5,7 @@ import subprocess
 from html import escape
 from typing import cast
 from app.core.config import config
+from app.core.logging import bind_job
 from app.domain.ladder import PRESETS
 from app.domain.playlist import Variant, avc1_codec, bandwidth, build_manifest, build_master
 from app.domain.state import transition
@@ -69,6 +70,7 @@ def _web_mp4(src: str, out: str, *, web_safe: bool, top: str) -> bool:
 def package(results, job_id: str) -> dict:
     """Chord callback: assemble master.m3u8 + web.mp4 + manifest, then mark the job done.
     Fires once all renditions succeed; the chord prepends their results as the first arg."""
+    bind_job(job_id)
     results = results if isinstance(results, list) else [results]
     r = get_sync_client()
     if cast(str, r.hget(f"job:{job_id}", "status")) == "done":

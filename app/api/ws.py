@@ -6,6 +6,7 @@ import redis.asyncio as aioredis
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from app.api.model import progress_map, results_view
 from app.core.config import config
+from app.core.logging import bind_job
 from app.domain.state import TERMINAL
 from app.storage.state import get_client
 
@@ -38,6 +39,7 @@ async def _send_terminal(ws: WebSocket, r, job_id: str, status: str) -> None:
 
 @router.websocket("/jobs/{job_id}/progress")
 async def progress_ws(ws: WebSocket, job_id: str):
+    bind_job(job_id)
     await ws.accept()
     r = get_client()
     ps_client = _new_pubsub_client()

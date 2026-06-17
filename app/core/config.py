@@ -43,6 +43,7 @@ class Config(BaseSettings):
 
     admin_token: str = Field(min_length=1)
     profile: Literal["dev", "deploy"] = "dev"
+    log_level: str = "INFO"
 
     model_config = SettingsConfigDict(
         env_file=".env",

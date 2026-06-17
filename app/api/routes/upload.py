@@ -7,6 +7,7 @@ from fastapi.responses import JSONResponse
 from app.api.errors import InvalidUpload, StoragePressure, UnsupportedMedia, UploadTooLarge
 from app.api.utils import new_job_id, now_iso
 from app.core.config import config
+from app.core.logging import bind_job
 from app.storage.state import get_client
 from app.storage.writer import stream_to_disk
 from app.storage.pressure import under_pressure
@@ -29,6 +30,7 @@ async def upload(request: Request, filename: str | None = None):
         raise StoragePressure()
 
     job_id = new_job_id()
+    bind_job(job_id)
     dest = config.uploads_dir / job_id / f"source{ext}"
     try:
         content_hash, size = await stream_to_disk(request.stream(), dest, config.max_upload_bytes)

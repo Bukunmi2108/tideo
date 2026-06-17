@@ -6,6 +6,7 @@ from typing import cast
 from celery import chord, group
 
 from app.core.config import config
+from app.core.logging import bind_job
 from app.domain.errors import ENCODE_FAILED_TRANSIENT
 from app.domain.state import transition
 from app.events.producer import emit
@@ -49,6 +50,7 @@ def build_and_fire_chord(job_id: str, presets: list[str]) -> None:
 @celery_app.task(name="app.dispatcher.dispatch.fail_job")
 def fail_job(request, exc, traceback, job_id: str):
     """link_error handler — runs on any header/callback hard failure. ADR-3: the whole job fails."""
+    bind_job(job_id)
     r = get_sync_client()
     cur = cast(str, r.hget(f"job:{job_id}", "status")) or ""
     nxt = transition(cur, "failed", job_id=job_id, caller="chord-fail")

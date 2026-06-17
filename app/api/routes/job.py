@@ -8,6 +8,7 @@ from app.api.model import (
     JobListResponse, JobResponse, progress_map, results_view, results_view_pg,
 )
 from app.core.config import config
+from app.core.logging import bind_job
 from app.storage.state import get_client
 from app.storage.db import persist_terminal, get_job as db_get_job, list_jobs as db_list_jobs
 from app.storage.pressure import under_pressure
@@ -87,6 +88,7 @@ async def list_jobs(
 
 @router.get("/jobs/{job_id}", response_model=JobResponse)
 async def get_job(job_id: str):
+    bind_job(job_id)
     rec = await get_client().hgetall(f"job:{job_id}")
     if not rec or "status" not in rec:                   # hot state gone/torn -> fall back to the cold tier
         row = await run_in_threadpool(db_get_job, job_id)
@@ -118,6 +120,7 @@ async def get_job(job_id: str):
 
 @router.post("/jobs/{job_id}/transcode", status_code=202)
 async def transcode(job_id: str, body: TranscodeRequest):
+    bind_job(job_id)
     r = get_client()
     rec = await r.hgetall(f"job:{job_id}")
     if not rec:
@@ -151,6 +154,7 @@ async def transcode(job_id: str, body: TranscodeRequest):
 
 @router.post("/jobs/{job_id}/cancel", status_code=202)
 async def cancel(job_id: str):
+    bind_job(job_id)
     r = get_client()
     rec = await r.hgetall(f"job:{job_id}")
     if not rec:
