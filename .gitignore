@@ -30,3 +30,6 @@ frontend/tsconfig.tsbuildinfo
 
 fixtures/*
 !fixtures/reference/
+
+# Celery Beat's local schedule DB (written into /app via the bind-mount)
+celerybeat-schedule*

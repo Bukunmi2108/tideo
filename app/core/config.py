@@ -31,6 +31,8 @@ class Config(BaseSettings):
     max_source_seconds: int = 7200
     storage_watermark_pct: int = 85
     output_ttl_days: int = 7
+    cleanup_interval_seconds: int = 3600
+    source_grace_seconds: int = 86400
 
     x264_preset: str = "ultrafast"
     dev_max_renditions: int = 4

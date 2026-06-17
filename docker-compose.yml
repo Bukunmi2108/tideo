@@ -190,6 +190,26 @@ services:
     networks:
       - tideo-net
 
+  beat:
+    container_name: tideo_beat
+    restart: unless-stopped
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    command: celery -A app.workers.celery_app beat --schedule=/data/celerybeat-schedule --loglevel=info
+    volumes:
+      - .:/app
+      - data:/data
+    env_file:
+      - .env
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - tideo-net
+
   audit:
     container_name: tideo_audit
     restart: unless-stopped

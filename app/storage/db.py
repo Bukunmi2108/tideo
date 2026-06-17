@@ -182,6 +182,44 @@ def list_jobs(*, status: str | None = None, limit: int = 20, offset: int = 0) ->
         conn.close()
 
 
+def list_expirable(cutoff) -> list:
+    """done jobs whose retention window has elapsed; job_id + content_hash for output + dedupe cleanup."""
+    conn = psycopg2.connect(config.postgres_dsn)
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("SELECT job_id, content_hash FROM jobs WHERE status = 'done' AND finished_at < %s",
+                        (cutoff,))
+            return cur.fetchall()
+    finally:
+        conn.close()
+
+
+def mark_expired(job_id: str, expired_at) -> bool:
+    """done -> expired transition. Returns whether THIS call won it, so re-runs are no-ops and don't re-emit."""
+    conn = psycopg2.connect(config.postgres_dsn)
+    try:
+        with conn.cursor() as cur:
+            cur.execute("UPDATE jobs SET status = 'expired', expired_at = %s WHERE job_id = %s AND status = 'done'",
+                        (expired_at, job_id))
+            won = cur.rowcount > 0
+        conn.commit()
+        return won
+    finally:
+        conn.close()
+
+
+def list_stale_sources(cutoff) -> list:
+    """failed/cancelled jobs past the grace window — their source uploads can be reclaimed."""
+    conn = psycopg2.connect(config.postgres_dsn)
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("SELECT job_id FROM jobs WHERE status IN ('failed','cancelled') AND finished_at < %s",
+                        (cutoff,))
+            return cur.fetchall()
+    finally:
+        conn.close()
+
+
 def persist_terminal(job_id: str, rec: dict, *, results=None, expired_at: str | None = None) -> None:
     """Write the durable terminal row (+ renditions) for a job.
 

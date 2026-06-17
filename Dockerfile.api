@@ -2,14 +2,28 @@ FROM python:3.12-slim@sha256:a39549e211a16149edf74e5fdc9ef03a6767e46cd987c5048b6
 
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
+ENV UV_PROJECT_ENVIRONMENT=/opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
 WORKDIR /app
 
 COPY pyproject.toml uv.lock ./
 
 RUN uv sync --frozen --no-cache
 
+# Match the worker's uid so both share the data volume — the API creates upload dirs that the
+# worker (which runs the lifecycle sweep + source-on-success cleanup) must be able to delete.
+ARG WORKER_UID=1000
+ARG WORKER_GID=1000
+RUN groupadd -g ${WORKER_GID} worker \
+ && useradd  -u ${WORKER_UID} -g worker -m worker \
+ && mkdir -p /data \
+ && chown -R worker:worker /data
+
 COPY app/ ./app/
 
 EXPOSE 8000
 
-CMD ["uv", "run", "uvicorn", "app.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+USER worker
+
+CMD ["uvicorn", "app.api.main:app", "--host", "0.0.0.0", "--port", "8000"]

@@ -1,5 +1,6 @@
 import json
 import logging
+import shutil
 import subprocess
 from html import escape
 from typing import cast
@@ -70,6 +71,8 @@ def package(results, job_id: str) -> dict:
     Fires once all renditions succeed; the chord prepends their results as the first arg."""
     results = results if isinstance(results, list) else [results]
     r = get_sync_client()
+    if cast(str, r.hget(f"job:{job_id}", "status")) == "done":
+        return {"status": "done", "job_id": job_id}
     rec = r.hgetall(f"job:{job_id}")
     meta = json.loads(rec["source_meta"])
     duration = meta["duration"]
@@ -110,6 +113,12 @@ def package(results, job_id: str) -> dict:
         })
         r.expire(f"job:{job_id}", config.output_ttl_days * 86400)   # hot state yields to Postgres after the window
         persist_terminal(job_id, r.hgetall(f"job:{job_id}"), results=results)
+        try:
+            shutil.rmtree(config.uploads_dir / job_id)   # source done its job; reclaim it now
+        except FileNotFoundError:
+            pass
+        except OSError:
+            logger.warning("source reclaim failed job=%s (orphaned)", job_id)
         emit(JOB_COMPLETED, job_id, {
             "renditions": len(variants),
             "output_bytes_total": sum(res.get("output_bytes", 0) for res in results),

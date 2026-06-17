@@ -34,4 +34,11 @@ app.conf.update(
 
     worker_max_tasks_per_child=20,
     result_expires=86400,
+
+    beat_schedule={
+        "expiry-sweep": {
+            "task": "app.workers.tasks.cleanup.sweep",
+            "schedule": float(config.cleanup_interval_seconds),
+        },
+    },
 )
