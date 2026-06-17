@@ -9,6 +9,7 @@ from app.api.routes import upload, job, artifacts, admin
 from app.core.config import config
 from app.events.admin import ensure_topics
 from app.events.producer import flush_producer
+from app.storage.db import init_schema
 from app.api import ws as ws_module
 
 logger = logging.getLogger(__name__)
@@ -17,6 +18,7 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     ensure_topics()
+    init_schema()
     yield
     flush_producer()
 

@@ -10,6 +10,7 @@ from app.domain.errors import ENCODE_FAILED_TRANSIENT
 from app.domain.state import transition
 from app.events.producer import emit
 from app.events.topics import JOB_FAILED
+from app.storage.db import persist_terminal
 from app.storage.state import get_sync_client
 from app.workers import dlq
 from app.workers.celery_app import app as celery_app
@@ -58,6 +59,8 @@ def fail_job(request, exc, traceback, job_id: str):
         r.hset(f"job:{job_id}", mapping={
             "status": nxt, "error_code": code, "error_message": msg, "error_stage": stage,
         })
+        r.expire(f"job:{job_id}", config.output_ttl_days * 86400)
+        persist_terminal(job_id, r.hgetall(f"job:{job_id}"))
         emit(JOB_FAILED, job_id, {"error_code": code, "stage": stage})
         r.publish(f"progress:{job_id}", json.dumps({"event": "terminal"}))  # wake a live WS relay
         dlq.add(r, {

@@ -10,6 +10,7 @@ from app.domain.state import transition
 from app.events.producer import emit
 from app.events.topics import JOB_COMPLETED
 from app.storage import paths
+from app.storage.db import persist_terminal
 from app.storage.state import get_sync_client
 from app.workers.base import PackageTask
 from app.workers.celery_app import app
@@ -99,7 +100,7 @@ def package(results, job_id: str) -> dict:
         '<script>var h=new Hls({debug:true});h.loadSource("playlist");h.attachMedia(document.getElementById("v"));</script>'
     )
 
-    # terminal: done + results refs + job.completed. (Postgres jobs row: Phase 7 owns the schema.)
+    # terminal: done + results refs + job.completed + durable Postgres row.
     cur = cast(str, r.hget(f"job:{job_id}", "status")) or ""
     nxt = transition(cur, "done", job_id=job_id, caller="package")
     if nxt:
@@ -107,6 +108,8 @@ def package(results, job_id: str) -> dict:
             "status": nxt,
             "results": json.dumps({"master": "master.m3u8", "web_mp4": "web.mp4", "manifest": "manifest.json"}),
         })
+        r.expire(f"job:{job_id}", config.output_ttl_days * 86400)   # hot state yields to Postgres after the window
+        persist_terminal(job_id, r.hgetall(f"job:{job_id}"), results=results)
         emit(JOB_COMPLETED, job_id, {
             "renditions": len(variants),
             "output_bytes_total": sum(res.get("output_bytes", 0) for res in results),

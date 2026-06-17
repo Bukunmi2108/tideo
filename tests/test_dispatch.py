@@ -28,6 +28,9 @@ class FakeRedis:
         self.kv[k] = v
         return True
 
+    def expire(self, k, ttl):
+        return True
+
 
 SRC_META = json.dumps({"fps": 30.0, "duration": 30.0, "has_audio": True})
 
@@ -68,12 +71,15 @@ def test_fail_job_marks_failed_and_revokes_siblings(monkeypatch):
     fake = FakeRedis({"status": "transcoding", "rendition_ids": json.dumps(["r0", "r1"])})
     monkeypatch.setattr(dispatch, "get_sync_client", lambda: fake)
     emitted, revoked = [], []
+    persisted = []
     monkeypatch.setattr(dispatch, "emit", lambda et, jid, p: emitted.append((et, jid)))
+    monkeypatch.setattr(dispatch, "persist_terminal", lambda jid, rec, **k: persisted.append((jid, k)))
     monkeypatch.setattr(dispatch.celery_app.control, "revoke",
                         lambda tid, terminate=False: revoked.append(tid))
 
     dispatch.fail_job(None, None, None, "j1")
 
+    assert persisted == [("j1", {})]                         # durable row written, no rendition results
     assert fake.hashes["job:j1"]["status"] == "failed"
     assert emitted == [("job.failed", "j1")]
     assert revoked == ["r0", "r1"]                           # siblings revoked
@@ -91,6 +97,7 @@ def test_fail_job_preserves_classified_error_from_rendition(monkeypatch):
     monkeypatch.setattr(dispatch, "get_sync_client", lambda: fake)
     codes = []
     monkeypatch.setattr(dispatch, "emit", lambda et, jid, p: codes.append(p.get("error_code")))
+    monkeypatch.setattr(dispatch, "persist_terminal", lambda *a, **k: None)
     monkeypatch.setattr(dispatch.celery_app.control, "revoke", lambda *a, **k: None)
 
     dispatch.fail_job(None, None, None, "j1")

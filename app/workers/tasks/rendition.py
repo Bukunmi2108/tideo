@@ -1,5 +1,6 @@
 import json, os, signal, subprocess, threading, time
 from collections import deque
+from datetime import datetime, timezone
 from typing import NoReturn, cast
 from celery.exceptions import Ignore, SoftTimeLimitExceeded
 from app.domain.errors import TideoError, classify, make_error, ENCODE_TIMEOUT, TRANSCODE
@@ -81,7 +82,10 @@ def _mark_started(job_id):
     cur = cast(str, r.hget(f"job:{job_id}", "status")) or ""
     nxt = transition(cur, "transcoding", job_id=job_id, caller="rendition")
     if nxt:
-        r.hset(f"job:{job_id}", mapping={"status": nxt})
+        r.hset(f"job:{job_id}", mapping={
+            "status": nxt,
+            "started_at": datetime.now(timezone.utc).isoformat(),
+        })
         emit(JOB_STARTED, job_id, {})
 
 def _write_progress(job_id, preset, pct):
@@ -146,7 +150,7 @@ def rendition(self, job_id: str, preset_name: str, src: str, meta: dict) -> dict
         secs = round(time.monotonic() - started, 1)
         emit(RENDITION_COMPLETED, job_id,
              {"preset": preset_name, "output_bytes": out_bytes, "encode_seconds": secs})
-        return {"status": "ok", "preset": preset_name, "output_bytes": out_bytes}
+        return {"status": "ok", "preset": preset_name, "output_bytes": out_bytes, "encode_seconds": secs}
     except Cancelled:
         logger.info("rendition cancelled job=%s preset=%s", job_id, preset_name)
         raise Ignore()  # job already marked cancelled by the API; don't fail it via link_error

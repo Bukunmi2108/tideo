@@ -1,9 +1,12 @@
 import json
 import shutil
 from fastapi import APIRouter
+from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 from app.api.model import JobResponse, progress_map, results_view
+from app.core.config import config
 from app.storage.state import get_client
+from app.storage.db import persist_terminal
 from app.storage import paths
 from app.api.errors import ApiError
 from app.domain.state import transition
@@ -92,6 +95,8 @@ async def cancel(job_id: str):
     assert nxt is not None
     await r.set(f"cancel:{job_id}", "1", ex=3600)          # flag the running encode loop to kill FFmpeg
     await r.hset(f"job:{job_id}", mapping={"status": nxt})
+    await r.expire(f"job:{job_id}", config.output_ttl_days * 86400)
+    await run_in_threadpool(persist_terminal, job_id, await r.hgetall(f"job:{job_id}"))
 
     ids = json.loads(rec.get("rendition_ids") or "[]")
     if rec.get("chord_callback_id"):

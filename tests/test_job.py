@@ -27,6 +27,9 @@ class FakeRedis:
     async def publish(self, ch, msg):
         pass
 
+    async def expire(self, k, ttl):
+        return True
+
 
 @pytest.fixture
 def client(monkeypatch):
@@ -186,12 +189,15 @@ def test_cancel_transitions_flags_and_revokes(client, monkeypatch, tmp_path, sta
     seed(fake, "jc", status=status, rendition_ids=json.dumps(["r0", "r1"]), chord_callback_id="cb")
     revoked, published = [], []
     monkeypatch.setattr(job_route.celery_app.control, "revoke", lambda ids, **k: revoked.append((ids, k)))
+    persisted = []
     monkeypatch.setattr(job_route, "publish", lambda env: published.append(env.event_type))
+    monkeypatch.setattr(job_route, "persist_terminal", lambda jid, rec, **k: persisted.append(jid))
     monkeypatch.setattr(job_route.paths, "output_dir", lambda jid: tmp_path)
 
     r = c.post("/jobs/jc/cancel")
 
     assert r.status_code == 202 and r.json()["status"] == "cancelled"
+    assert persisted == ["jc"]                               # durable cancelled row written
     assert fake.hashes["job:jc"]["status"] == "cancelled"
     assert fake.kv["cancel:jc"] == "1"                       # flag the running encode loop
     assert revoked[0][0] == ["r0", "r1", "cb"]               # header + callback revoked (no terminate)
