@@ -18,11 +18,13 @@ class FakeRedis:
         return None
 
 
-def _client(monkeypatch, status="done", tmp_path=None):
+def _client(monkeypatch, status: str | None = "done", tmp_path=None, cold=None):
     """Return a TestClient with Redis stubbed to the given status.
-    If tmp_path is provided, output_dir() is pointed there."""
+    If tmp_path is provided, output_dir() is pointed there. `cold` is the Postgres fallback row
+    (None by default -> a Redis miss resolves to 404, not a live DB hit)."""
     fake = FakeRedis(status)
     monkeypatch.setattr(art_route, "get_client", lambda: fake)
+    monkeypatch.setattr(art_route, "db_get_job", lambda _jid: cold)
     if tmp_path is not None:
         monkeypatch.setattr(art_route.paths, "output_dir", lambda _jid: tmp_path)
     return TestClient(app, raise_server_exceptions=False)
@@ -60,6 +62,39 @@ def _seed_job(tmp_path, presets=("720p",), seg_count=2):
 def test_guard_rejects_non_done(monkeypatch, status, expected):
     c = _client(monkeypatch, status=status)
     assert c.get("/jobs/j1/playlist").status_code == expected
+
+
+# ---------- cold-tier fallback: artifacts stay servable after the Redis hash is gone ----------
+
+def test_playlist_served_from_cold_tier_after_redis_loss(monkeypatch, tmp_path):
+    _seed_job(tmp_path)
+    # Redis miss (status None) but Postgres still has the done row -> files still serve
+    c = _client(monkeypatch, status=None, tmp_path=tmp_path, cold={"status": "done"})
+    assert c.get("/jobs/j1/playlist").status_code == 200
+
+
+def test_cold_tier_expired_is_410(monkeypatch, tmp_path):
+    _seed_job(tmp_path)
+    c = _client(monkeypatch, status=None, tmp_path=tmp_path, cold={"status": "expired"})
+    assert c.get("/jobs/j1/playlist").status_code == 410
+
+
+def test_cold_tier_missing_is_404(monkeypatch, tmp_path):
+    _seed_job(tmp_path)
+    c = _client(monkeypatch, status=None, tmp_path=tmp_path, cold=None)   # gone in both tiers
+    assert c.get("/jobs/j1/playlist").status_code == 404
+
+
+def test_db_outage_resolving_status_is_503(monkeypatch, tmp_path):
+    import psycopg2
+    _seed_job(tmp_path)
+    fake = FakeRedis(None)
+    monkeypatch.setattr(art_route, "get_client", lambda: fake)
+    monkeypatch.setattr(art_route, "db_get_job",
+                        lambda _jid: (_ for _ in ()).throw(psycopg2.OperationalError("down")))
+    monkeypatch.setattr(art_route.paths, "output_dir", lambda _jid: tmp_path)
+    c = TestClient(app, raise_server_exceptions=False)
+    assert c.get("/jobs/j1/playlist").status_code == 503
 
 
 # ---------- poster/sprite serve before done (written by the thumbs task mid-chord) ----------

@@ -3,11 +3,13 @@ from pathlib import Path
 from typing import cast
 
 from fastapi import APIRouter
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, HTMLResponse, Response
 
 from app.api.errors import ApiError
 from app.domain.ladder import PRESETS
 from app.storage import paths
+from app.storage.db import get_job as db_get_job
 from app.storage.state import get_client
 
 router = APIRouter(tags=["Artifacts"])
@@ -24,9 +26,18 @@ IMMUTABLE = "max-age=31536000, immutable"
 SHORT     = "max-age=3600"
 
 
+async def _resolve_status(job_id: str) -> str | None:
+    """Hot status, falling back to the cold tier so artifacts stay servable after a Redis flush/TTL."""
+    status = cast(str | None, await get_client().hget(f"job:{job_id}", "status"))
+    if status is not None:
+        return status
+    row = await run_in_threadpool(db_get_job, job_id)
+    return row["status"] if row else None
+
+
 async def _guard(job_id: str) -> Path:
     """Check job is `done`; return its output dir. Raises 404/410 otherwise."""
-    status = cast(str | None, await get_client().hget(f"job:{job_id}", "status"))
+    status = await _resolve_status(job_id)
     if status is None:
         raise ApiError(404, "NOT_FOUND", "job not found", job_id)
     if status == "expired":
@@ -39,7 +50,7 @@ async def _guard(job_id: str) -> Path:
 async def _guard_thumb(job_id: str) -> Path:
     """Looser guard for poster/sprite: the thumbs task writes these mid-chord,
     before `done`. Serve them as soon as they exist; 404 until then, 410 if expired."""
-    status = cast(str | None, await get_client().hget(f"job:{job_id}", "status"))
+    status = await _resolve_status(job_id)
     if status is None:
         raise ApiError(404, "NOT_FOUND", "job not found", job_id)
     if status == "expired":
