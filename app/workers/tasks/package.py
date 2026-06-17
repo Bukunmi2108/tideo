@@ -12,7 +12,7 @@ from app.events.producer import emit
 from app.events.topics import JOB_COMPLETED
 from app.storage import paths
 from app.storage.db import persist_terminal
-from app.storage.state import get_sync_client
+from app.storage.state import get_sync_client, write_status
 from app.workers.base import PackageTask
 from app.workers.celery_app import app
 from app.workers.tasks.thumbs import write_poster, write_sprite
@@ -108,8 +108,7 @@ def package(results, job_id: str) -> dict:
     cur = cast(str, r.hget(f"job:{job_id}", "status")) or ""
     nxt = transition(cur, "done", job_id=job_id, caller="package")
     if nxt:
-        r.hset(f"job:{job_id}", mapping={
-            "status": nxt,
+        write_status(r, job_id, nxt, extra={
             "results": json.dumps({"master": "master.m3u8", "web_mp4": "web.mp4", "manifest": "manifest.json"}),
         })
         r.expire(f"job:{job_id}", config.output_ttl_days * 86400)   # hot state yields to Postgres after the window

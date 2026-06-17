@@ -3,6 +3,7 @@ from app.core.logging import get_logger
 log = get_logger()
 
 TERMINAL = {"done", "failed", "cancelled", "expired"}
+ACTIVE = {"inspecting", "awaiting_choice", "queued", "transcoding"}
 
 TRANSITIONS = {
     "inspecting":      {"awaiting_choice", "failed"},

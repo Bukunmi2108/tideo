@@ -182,6 +182,17 @@ def list_jobs(*, status: str | None = None, limit: int = 20, offset: int = 0) ->
         conn.close()
 
 
+def count_by_status() -> dict:
+    """Terminal job counts straight from the indexed jobs table — drift-free, no Redis scan."""
+    conn = psycopg2.connect(config.postgres_dsn)
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT status, count(*) FROM jobs GROUP BY status")
+            return {row[0]: row[1] for row in cur.fetchall()}
+    finally:
+        conn.close()
+
+
 def list_expirable(cutoff) -> list:
     """done jobs whose retention window has elapsed; job_id + content_hash for output + dedupe cleanup."""
     conn = psycopg2.connect(config.postgres_dsn)

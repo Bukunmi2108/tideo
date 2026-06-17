@@ -9,7 +9,7 @@ from app.api.model import (
 )
 from app.core.config import config
 from app.core.logging import bind_job
-from app.storage.state import get_client
+from app.storage.state import get_client, awrite_status
 from app.storage.db import persist_terminal, get_job as db_get_job, list_jobs as db_list_jobs
 from app.storage.pressure import under_pressure
 from app.storage import paths
@@ -139,8 +139,7 @@ async def transcode(job_id: str, body: TranscodeRequest):
 
     nxt = transition("awaiting_choice", "queued", job_id=job_id, caller="transcode")
     assert nxt is not None
-    await r.hset(f"job:{job_id}", mapping={
-        "status": nxt,
+    await awrite_status(r, job_id, nxt, extra={
         "presets": json.dumps(body.presets),
         "subtitles": "true" if body.subtitles else "false",
     })
@@ -165,7 +164,7 @@ async def cancel(job_id: str):
     nxt = transition(rec["status"], "cancelled", job_id=job_id, caller="cancel")
     assert nxt is not None
     await r.set(f"cancel:{job_id}", "1", ex=3600)          # flag the running encode loop to kill FFmpeg
-    await r.hset(f"job:{job_id}", mapping={"status": nxt})
+    await awrite_status(r, job_id, nxt)
     await r.expire(f"job:{job_id}", config.output_ttl_days * 86400)
     await run_in_threadpool(persist_terminal, job_id, await r.hgetall(f"job:{job_id}"))
 

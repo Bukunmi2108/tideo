@@ -7,14 +7,15 @@ from fastapi.responses import JSONResponse
 from app.api.errors import InvalidUpload, StoragePressure, UnsupportedMedia, UploadTooLarge
 from app.api.utils import new_job_id, now_iso
 from app.core.config import config
-from app.core.logging import bind_job
-from app.storage.state import get_client
+from app.core.logging import bind_job, get_logger
+from app.storage.state import get_client, awrite_status
 from app.storage.writer import stream_to_disk
 from app.storage.pressure import under_pressure
 from app.workers.celery_app import app as celery_app
 from app.storage import dedupe
 
 router = APIRouter(tags=["Upload"])
+log = get_logger()
 
 ALLOWED_EXTS = {".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v"}
 
@@ -43,8 +44,7 @@ async def upload(request: Request, filename: str | None = None):
         raise InvalidUpload("empty upload")
 
     r = get_client()
-    await r.hset(f"job:{job_id}", mapping={
-        "status": "inspecting",
+    await awrite_status(r, job_id, "inspecting", extra={
         "source_filename": filename,
         "content_hash": content_hash,
         "source_path": str(dest),
@@ -53,6 +53,7 @@ async def upload(request: Request, filename: str | None = None):
 
     if await dedupe.claim(r, content_hash, job_id):
         celery_app.send_task("app.workers.tasks.inspect.probe", args=[job_id, str(dest)])
+        log.info("upload_completed", dedupe="miss", size_bytes=size)
         return JSONResponse(status_code=202, content={"job_id": job_id, "status": "inspecting", "dedupe": "miss"})
 
     owner_id = await dedupe.owner(r, content_hash)
@@ -60,11 +61,13 @@ async def upload(request: Request, filename: str | None = None):
         shutil.rmtree(dest.parent, ignore_errors=True)
         await r.delete(f"job:{job_id}")
         status = await r.hget(f"job:{owner_id}", "status")
+        log.info("upload_completed", dedupe="hit", owner=owner_id)
         return JSONResponse(status_code=202, content={"job_id": owner_id, "status": status, "dedupe": "hit"})
 
     await dedupe.reclaim(r, content_hash, job_id)
 
     celery_app.send_task("app.workers.tasks.inspect.probe", args=[job_id, str(dest)])
+    log.info("upload_completed", dedupe="miss", size_bytes=size)
 
     return JSONResponse(
         status_code=202,

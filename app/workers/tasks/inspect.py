@@ -5,7 +5,7 @@ from app.domain import recommend
 from app.domain.state import transition
 from app.core.logging import bind_job, get_logger
 from app.storage.db import persist_terminal
-from app.storage.state import get_sync_client
+from app.storage.state import get_sync_client, write_status
 from app.workers import ffprobe
 from app.workers.base import InspectTask
 from app.workers.celery_app import app
@@ -31,8 +31,7 @@ def probe(job_id: str, src: str) -> dict:
         nxt = transition(cur, "awaiting_choice", job_id=job_id, caller="inspect")
         if nxt is None:
             return {"status": "dropped", "job_id": job_id}
-        r.hset(f"job:{job_id}", mapping={
-            "status": nxt,
+        write_status(r, job_id, nxt, extra={
             "source_meta": json.dumps(asdict(meta)),
             "web_safe": "true" if safe else "false",
             "web_safe_reason": reason or "",
@@ -45,8 +44,7 @@ def probe(job_id: str, src: str) -> dict:
         nxt = transition(cur, "failed", job_id=job_id, caller="inspect")
         if nxt is None:
             return {"status": "dropped", "job_id": job_id}
-        r.hset(f"job:{job_id}", mapping={
-            "status": nxt,
+        write_status(r, job_id, nxt, extra={
             "error_code": e.code, "error_message": e.message, "error_stage": "inspect",
         })
         r.expire(f"job:{job_id}", config.output_ttl_days * 86400)

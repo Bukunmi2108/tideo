@@ -9,7 +9,7 @@ from app.domain.state import transition
 from app.events.producer import emit
 from app.events.topics import JOB_STARTED, RENDITION_STARTED, RENDITION_COMPLETED, RENDITION_FAILED
 from app.storage import paths
-from app.storage.state import get_sync_client
+from app.storage.state import get_sync_client, write_status
 from app.domain.ladder import PRESETS
 from app.workers.ffmpeg import build_rendition_argv
 from app.workers.ffprobe import SourceMeta
@@ -82,10 +82,10 @@ def _mark_started(job_id):
     cur = cast(str, r.hget(f"job:{job_id}", "status")) or ""
     nxt = transition(cur, "transcoding", job_id=job_id, caller="rendition")
     if nxt:
-        r.hset(f"job:{job_id}", mapping={
-            "status": nxt,
-            "started_at": datetime.now(timezone.utc).isoformat(),
-        })
+        write_status(r, job_id, nxt, extra={"started_at": datetime.now(timezone.utc).isoformat()})
+        created = r.hget(f"job:{job_id}", "created_at")
+        qw = round((datetime.now(timezone.utc) - datetime.fromisoformat(created)).total_seconds(), 1) if created else None
+        log.info("job_started", queue_wait_seconds=qw)   # enqueue->first-encode latency (8.3 metric)
         emit(JOB_STARTED, job_id, {})
 
 def _write_progress(job_id, preset, pct):
@@ -149,7 +149,9 @@ def rendition(self, job_id: str, preset_name: str, src: str, meta: dict) -> dict
         _write_progress(job_id, preset_name, 100.0)          # confirmed success -> 100
         out_bytes = sum(f.stat().st_size for f in final.glob("*.ts"))
         secs = round(time.monotonic() - started, 1)
-        log.info("rendition_completed", preset=preset_name, output_bytes=out_bytes, encode_seconds=secs)
+        ratio = round(secs / m.duration, 3) if m.duration else None   # encode-time / media-seconds (8.3)
+        log.info("rendition_completed", preset=preset_name, output_bytes=out_bytes,
+                 encode_seconds=secs, encode_ratio=ratio)
         emit(RENDITION_COMPLETED, job_id,
              {"preset": preset_name, "output_bytes": out_bytes, "encode_seconds": secs})
         return {"status": "ok", "preset": preset_name, "output_bytes": out_bytes, "encode_seconds": secs}

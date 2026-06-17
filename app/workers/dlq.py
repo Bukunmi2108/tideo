@@ -12,5 +12,6 @@ def add(client, rec: dict) -> None:
     (the job hash already carries the error)."""
     try:
         client.hset(DLQ_KEY, mapping={rec["id"]: json.dumps(rec)})
+        log.info("dlq_added", code=rec.get("error_code"), task=rec.get("task"))   # retry/DLQ-by-code metric
     except Exception:
         log.warning("dlq_write_failed", dlq_id=rec.get("id"))

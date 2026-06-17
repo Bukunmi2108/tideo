@@ -35,6 +35,9 @@ class FakeRedis:
         self.hashes.setdefault(k, {}).update(mapping or {})
         return len(mapping or {})
 
+    async def hincrby(self, k, f, n):
+        return None
+
     async def hgetall(self, k):
         return dict(self.hashes.get(k, {}))
 

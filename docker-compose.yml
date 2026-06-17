@@ -210,6 +210,25 @@ services:
     networks:
       - tideo-net
 
+  flower:
+    container_name: tideo_flower
+    profiles: ["dev"]                     # dev-only: `docker compose --profile dev up flower`
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    command: celery -A app.workers.celery_app flower --port=5555
+    ports:
+      - "5555:5555"
+    env_file:
+      - .env
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - tideo-net
+
   audit:
     container_name: tideo_audit
     restart: unless-stopped

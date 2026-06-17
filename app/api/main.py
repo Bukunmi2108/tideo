@@ -4,7 +4,7 @@ from fastapi import FastAPI, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from app.api.errors import ApiError
-from app.api.routes import upload, job, artifacts, admin
+from app.api.routes import upload, job, artifacts, admin, status
 from app.core.config import config
 from psycopg2 import InterfaceError, OperationalError
 from app.core.logging import configure_logging, get_logger
@@ -39,6 +39,7 @@ app.include_router(upload.router)
 app.include_router(job.router)
 app.include_router(artifacts.router)
 app.include_router(admin.router)
+app.include_router(status.router)
 app.include_router(ws_module.router)
 
 # (name, host, port) for every dependency /readyz probes.

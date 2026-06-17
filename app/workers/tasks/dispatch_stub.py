@@ -9,7 +9,7 @@ from app.events.topics import (
     RENDITION_COMPLETED,
     RENDITION_STARTED,
 )
-from app.storage.state import get_sync_client
+from app.storage.state import get_sync_client, write_status
 from app.workers.celery_app import app
 
 
@@ -47,7 +47,7 @@ def stub_job(job_id: str) -> dict:
         nxt = transition(cur, target, job_id=job_id, caller="stub")
         if nxt is None:
             return False
-        r.hset(f"job:{job_id}", mapping={"status": nxt})
+        write_status(r, job_id, nxt)
         return True
 
     def emit_event(event_type: str, payload: dict) -> None:

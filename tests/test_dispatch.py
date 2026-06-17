@@ -22,6 +22,9 @@ class FakeRedis:
         self.hashes.setdefault(k, {}).update(mapping or {})
         return len(mapping or {})
 
+    def hincrby(self, k, f, n):
+        return None
+
     def set(self, k, v, nx=False, ex=None):
         if nx and k in self.kv:
             return None

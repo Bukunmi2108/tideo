@@ -16,6 +16,7 @@ class Config(BaseSettings):
 
     rabbitmq_host: str = "rabbitmq"
     rabbitmq_port: int = 5672
+    rabbitmq_mgmt_port: int = 15672
     rabbitmq_user: str = Field(default="guest", validation_alias="RABBITMQ_DEFAULT_USER")
     rabbitmq_password: str = Field(default="guest", validation_alias="RABBITMQ_DEFAULT_PASS")
 

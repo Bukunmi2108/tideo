@@ -21,8 +21,14 @@ class FakeRedis:
     async def set(self, k, v, ex=None):
         self.kv[k] = v
 
+    async def hget(self, k, f):
+        return self.hashes.get(k, {}).get(f)
+
     async def hset(self, k, mapping=None):
         self.hashes.setdefault(k, {}).update({kk: str(vv) for kk, vv in (mapping or {}).items()})
+
+    async def hincrby(self, k, f, n):
+        return None
 
     async def publish(self, ch, msg):
         pass

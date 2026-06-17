@@ -79,6 +79,15 @@ def test_expiry_redelivery_is_a_noop(conn):
     assert expired_at.isoformat().startswith("2026-06-24")   # first expiry stuck, not overwritten
 
 
+def test_count_by_status_groups_terminal_rows(conn):
+    from app.storage.db import count_by_status
+    write_terminal(conn, job_row("it_c1", _rec("done"), finished_at="2026-06-17T10:00:00+00:00"), [])
+    write_terminal(conn, job_row("it_c2", _rec("done"), finished_at="2026-06-17T10:00:00+00:00"), [])
+    write_terminal(conn, job_row("it_c3", _rec("failed"), finished_at="2026-06-17T10:00:00+00:00"), [])
+    counts = count_by_status()
+    assert counts.get("done", 0) >= 2 and counts.get("failed", 0) >= 1
+
+
 def test_list_expirable_and_mark_expired_round_trip(conn):
     from app.storage.db import list_expirable, mark_expired
     from datetime import datetime, timezone

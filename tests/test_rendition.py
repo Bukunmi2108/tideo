@@ -32,6 +32,9 @@ def test_mark_started_records_started_at(monkeypatch):
         def hset(self, k, mapping=None):
             self.hashes.setdefault(k, {}).update(mapping or {})
 
+        def hincrby(self, k, f, n):
+            return None
+
     fake = FakeRedis()
     monkeypatch.setattr(rendition, "get_sync_client", lambda: fake)
     monkeypatch.setattr(rendition, "emit", lambda *a, **k: None)
@@ -59,6 +62,9 @@ def test_mark_started_second_caller_is_noop(monkeypatch):
 
         def hset(self, k, mapping=None):
             self.hashes.setdefault(k, {}).update(mapping or {})
+
+        def hincrby(self, k, f, n):
+            return None
 
     fake = FakeRedis()
     emitted = []
