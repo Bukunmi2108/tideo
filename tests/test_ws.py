@@ -129,7 +129,7 @@ def test_failed_job_snapshot_then_state_with_error(monkeypatch):
         monkeypatch,
         {
             "status": "failed",
-            "error_code": "ENCODE_FAILED",
+            "error_code": "ENCODE_FAILED_TRANSIENT",
             "error_message": "x264 died",
             "error_stage": "transcode",
         },
@@ -140,7 +140,7 @@ def test_failed_job_snapshot_then_state_with_error(monkeypatch):
     assert f1["type"] == "snapshot"
     assert f2["type"] == "state"
     assert f2["status"] == "failed"
-    assert f2["error"]["code"] == "ENCODE_FAILED"
+    assert f2["error"]["code"] == "ENCODE_FAILED_TRANSIENT"
     assert f2["error"]["stage"] == "transcode"
     assert psc.ps.subscribed == []
 

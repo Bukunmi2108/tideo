@@ -78,6 +78,23 @@ def test_fail_job_marks_failed_and_revokes_siblings(monkeypatch):
     assert emitted == [("job.failed", "j1")]
     assert revoked == ["r0", "r1"]                           # siblings revoked
     assert fake.published == [("progress:j1", json.dumps({"event": "terminal"}))]  # wakes live WS
+    assert fake.hashes["job:j1"]["error_code"] == "ENCODE_FAILED_TRANSIENT"  # no rendition error stored -> default
+
+
+def test_fail_job_preserves_classified_error_from_rendition(monkeypatch):
+    fake = FakeRedis({
+        "status": "transcoding", "rendition_ids": "[]",
+        "error_code": "SOURCE_UNSUPPORTED", "error_message": "Decoder not found", "error_stage": "transcode",
+    })
+    monkeypatch.setattr(dispatch, "get_sync_client", lambda: fake)
+    codes = []
+    monkeypatch.setattr(dispatch, "emit", lambda et, jid, p: codes.append(p.get("error_code")))
+    monkeypatch.setattr(dispatch.celery_app.control, "revoke", lambda *a, **k: None)
+
+    dispatch.fail_job(None, None, None, "j1")
+
+    assert fake.hashes["job:j1"]["error_code"] == "SOURCE_UNSUPPORTED"  # classifier's verdict kept, not overwritten
+    assert codes == ["SOURCE_UNSUPPORTED"]                              # JOB_FAILED carries the real code
 
 
 def test_fail_job_on_already_terminal_is_noop(monkeypatch):

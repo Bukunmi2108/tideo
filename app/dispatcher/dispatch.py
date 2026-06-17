@@ -5,6 +5,7 @@ from typing import cast
 from celery import chord, group
 
 from app.core.config import config
+from app.domain.errors import ENCODE_FAILED_TRANSIENT
 from app.domain.state import transition
 from app.events.producer import emit
 from app.events.topics import JOB_FAILED
@@ -49,10 +50,13 @@ def fail_job(request, exc, traceback, job_id: str):
     cur = cast(str, r.hget(f"job:{job_id}", "status")) or ""
     nxt = transition(cur, "failed", job_id=job_id, caller="chord-fail")
     if nxt:                                                   # None -> already terminal, drop
+        code = cast(str, r.hget(f"job:{job_id}", "error_code")) or ENCODE_FAILED_TRANSIENT
+        msg = cast(str, r.hget(f"job:{job_id}", "error_message")) or "transcoding failed"
+        stage = cast(str, r.hget(f"job:{job_id}", "error_stage")) or "transcode"
         r.hset(f"job:{job_id}", mapping={
-            "status": nxt, "error_code": "ENCODE_FAILED", "error_stage": "transcode",
+            "status": nxt, "error_code": code, "error_message": msg, "error_stage": stage,
         })
-        emit(JOB_FAILED, job_id, {"error_code": "ENCODE_FAILED", "stage": "transcode"})
+        emit(JOB_FAILED, job_id, {"error_code": code, "stage": stage})
         r.publish(f"progress:{job_id}", json.dumps({"event": "terminal"}))  # wake a live WS relay
     for tid in json.loads(r.hget(f"job:{job_id}", "rendition_ids") or "[]"):
         celery_app.control.revoke(tid, terminate=True)        # best-effort sibling revocation

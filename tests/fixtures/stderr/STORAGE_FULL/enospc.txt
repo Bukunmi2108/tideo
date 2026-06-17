@@ -1,0 +1,3 @@
+[hls @ 0x55a1c0] Failed to open file 'seg_00042.ts': No space left on device
+av_interleaved_write_frame(): No space left on device
+Error writing trailer of /data/output/j_abc/720p/index.m3u8: No space left on device

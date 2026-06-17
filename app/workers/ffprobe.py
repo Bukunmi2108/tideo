@@ -76,9 +76,7 @@ class SourceMeta:
         """Returns a JSON-serializable dictionary for Celery backend storage."""
         return asdict(self)
 
-SOURCE_CORRUPT = "SOURCE_CORRUPT"
-SOURCE_NO_VIDEO = "SOURCE_NO_VIDEO"
-SOURCE_LIMITS_EXCEEDED = "SOURCE_LIMITS_EXCEEDED"
+from app.domain.errors import SOURCE_CORRUPT, SOURCE_NO_VIDEO, SOURCE_LIMITS_EXCEEDED  # noqa: E402  (re-exported)
 
 class InspectError(Exception):
     def __init__(self, code: str, message: str):
