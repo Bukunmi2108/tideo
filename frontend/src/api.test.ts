@@ -24,7 +24,7 @@ describe("getJob", () => {
     mockFetch({
       job_id: "j1",
       status: "awaiting_choice",
-      source: { duration: 30, width: 1280, height: 720, video_codec: "h264", has_audio: true, audio_codec: "aac", container: "mp4", bitrate: 5000000, rotation: 0 },
+      source: { duration: 30, width: 1280, height: 720, video_codec: "h264", has_audio: true, audio_codec: "aac", container: "mp4", bitrate: 5000000, fps: 30, video_streams: 1, audio_streams: 1 },
       recommended_presets: ["720p", "480p"],
       web_safe: true,
       web_safe_reason: null,
@@ -37,10 +37,18 @@ describe("getJob", () => {
   })
 
   it("parses a done response", async () => {
-    mockFetch({ job_id: "j1", status: "done", results: { master: "master.m3u8", web_mp4: "web.mp4", manifest: "manifest.json" } })
+    mockFetch({
+      job_id: "j1",
+      status: "done",
+      results: {
+        playlist: "/jobs/j1/playlist", web_mp4: "/jobs/j1/file", poster: "/jobs/j1/poster",
+        sprite: "/jobs/j1/sprite", player: "/jobs/j1/player", presets: ["720p", "480p"], duration: 60,
+      },
+    })
     const job = await getJob("j1")
     expect(job.status).toBe("done")
-    expect(job.results?.master).toBe("master.m3u8")
+    expect(job.results?.playlist).toBe("/jobs/j1/playlist")
+    expect(job.results?.presets).toEqual(["720p", "480p"])
   })
 
   it("throws ApiError on 404", async () => {

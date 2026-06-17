@@ -19,14 +19,16 @@ export type JobStatus =
 
 export interface SourceMeta {
   container: string
-  video_codec: string
+  video_codec: string | null
   audio_codec: string | null
   width: number
   height: number
   duration: number
-  bitrate: number
+  bitrate: number | null
+  fps: number | null
   has_audio: boolean
-  rotation: number
+  video_streams: number
+  audio_streams: number
 }
 
 export interface JobError {
@@ -37,9 +39,13 @@ export interface JobError {
 }
 
 export interface JobResults {
-  master: string
+  playlist: string // master.m3u8 URL for hls.js
   web_mp4: string
-  manifest: string
+  poster: string
+  sprite: string
+  player: string // embed player page; snippet composed from this
+  presets: string[]
+  duration: number | null
 }
 
 export interface JobResponse {

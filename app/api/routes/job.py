@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from app.api.model import JobResponse
+from app.api.model import JobResponse, progress_map, results_view
 from app.storage.state import get_client
 from app.api.errors import ApiError
 import json
@@ -33,9 +33,9 @@ async def get_job(job_id: str):
         resp["web_safe"] = rec["web_safe"] == "true"
         resp["web_safe_reason"] = rec.get("web_safe_reason") or None
     elif status in ("queued", "transcoding"):
-        resp["progress"] = {}
+        resp["progress"] = progress_map(rec)
     elif status == "done":
-        resp["results"] = {}
+        resp["results"] = results_view(job_id, rec)
     elif status == "failed":
         resp["error"] = {
             "code": rec.get("error_code"), "message": rec.get("error_message"),

@@ -94,14 +94,46 @@ def test_unknown_job_error_frame(monkeypatch):
     assert frame == {"type": "error", "code": "NOT_FOUND"}
 
 
-def test_done_job_snapshot_then_state_no_subscribe(monkeypatch):
-    c, psc = _setup(monkeypatch, {"status": "done"})
+def test_done_job_snapshot_then_state_with_results(monkeypatch):
+    c, psc = _setup(
+        monkeypatch,
+        {
+            "status": "done",
+            "presets": json.dumps(["720p", "480p"]),
+            "source_meta": json.dumps({"duration": 60.0}),
+        },
+    )
     with c.websocket_connect("/jobs/j1/progress") as ws:
         f1 = ws.receive_json()
         f2 = ws.receive_json()
     assert f1["type"] == "snapshot"
     assert f1["status"] == "done"
-    assert f2 == {"type": "state", "status": "done"}
+    assert f2["type"] == "state"
+    assert f2["status"] == "done"
+    assert f2["results"]["playlist"] == "/jobs/j1/playlist"
+    assert f2["results"]["presets"] == ["720p", "480p"]
+    assert f2["results"]["duration"] == 60.0
+    assert psc.ps.subscribed == []
+
+
+def test_failed_job_snapshot_then_state_with_error(monkeypatch):
+    c, psc = _setup(
+        monkeypatch,
+        {
+            "status": "failed",
+            "error_code": "ENCODE_FAILED",
+            "error_message": "x264 died",
+            "error_stage": "transcode",
+        },
+    )
+    with c.websocket_connect("/jobs/j1/progress") as ws:
+        f1 = ws.receive_json()
+        f2 = ws.receive_json()
+    assert f1["type"] == "snapshot"
+    assert f2["type"] == "state"
+    assert f2["status"] == "failed"
+    assert f2["error"]["code"] == "ENCODE_FAILED"
+    assert f2["error"]["stage"] == "transcode"
     assert psc.ps.subscribed == []
 
 
@@ -130,7 +162,9 @@ def test_terminal_detection_after_progress(monkeypatch):
         f3 = ws.receive_json()  # state
     assert f1["type"] == "snapshot"
     assert f2 == {"type": "progress", "preset": "720p", "percent": 55.0}
-    assert f3 == {"type": "state", "status": "done"}
+    assert f3["type"] == "state"
+    assert f3["status"] == "done"
+    assert "results" in f3
 
 
 def test_subscription_cleanup_on_terminal(monkeypatch):

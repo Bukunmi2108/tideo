@@ -4,6 +4,7 @@ import logging
 from typing import cast
 import redis.asyncio as aioredis
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from app.api.model import progress_map, results_view
 from app.core.config import config
 from app.domain.state import TERMINAL
 from app.storage.state import get_client
@@ -11,7 +12,7 @@ from app.storage.state import get_client
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-PING_INTERVAL = 25 # seconds 
+PING_INTERVAL = 25 # seconds
 
 
 def _new_pubsub_client() -> aioredis.Redis:
@@ -19,13 +20,20 @@ def _new_pubsub_client() -> aioredis.Redis:
     return aioredis.Redis(host=config.redis_host, port=config.redis_port, decode_responses=True)
 
 
-def _progress_map(rec: dict) -> dict:
-    """Extract progress:{preset} fields from the job hash into {preset: float}."""
-    return {
-        k.split(":", 1)[1]: float(v)
-        for k, v in rec.items()
-        if k.startswith("progress:")
-    }
+async def _send_terminal(ws: WebSocket, r, job_id: str, status: str) -> None:
+    """Send the terminal state frame, then close. `done` carries results, `failed` carries the error envelope."""
+    frame: dict = {"type": "state", "status": status}
+    if status in ("done", "failed"):
+        rec = cast(dict, await r.hgetall(f"job:{job_id}"))
+        if status == "done":
+            frame["results"] = results_view(job_id, rec)
+        else:
+            frame["error"] = {
+                "code": rec.get("error_code"), "message": rec.get("error_message"),
+                "stage": rec.get("error_stage"), "retryable": False,
+            }
+    await ws.send_json(frame)
+    await ws.close(code=1001)
 
 
 @router.websocket("/jobs/{job_id}/progress")
@@ -46,13 +54,12 @@ async def progress_ws(ws: WebSocket, job_id: str):
         await ws.send_json({
             "type": "snapshot",
             "status": status,
-            "progress": _progress_map(rec),
+            "progress": progress_map(rec),
         })
 
         # already terminal — send state frame + close immediately
         if status in TERMINAL:
-            await ws.send_json({"type": "state", "status": status})
-            await ws.close(code=1001)
+            await _send_terminal(ws, r, job_id, status)
             return
 
         # --- subscribe + relay ---
@@ -67,8 +74,7 @@ async def progress_ws(ws: WebSocket, job_id: str):
 
                 cur = cast(str | None, await r.hget(f"job:{job_id}", "status"))
                 if cur in TERMINAL:
-                    await ws.send_json({"type": "state", "status": cur})
-                    await ws.close(code=1001)
+                    await _send_terminal(ws, r, job_id, cur)
                     return
         finally:
             ping_task.cancel()
