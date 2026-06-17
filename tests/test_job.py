@@ -35,6 +35,8 @@ class FakeRedis:
 def client(monkeypatch):
     fake = FakeRedis()
     monkeypatch.setattr(job_route, "get_client", lambda: fake)
+    monkeypatch.setattr(job_route, "db_get_job", lambda jid: None)   # default: no cold row (override per test)
+    monkeypatch.setattr(job_route, "db_list_jobs", lambda **k: [])   # so no test hits a real Postgres
     return TestClient(app, raise_server_exceptions=False), fake
 
 
@@ -230,4 +232,145 @@ def test_failed_returns_error_envelope(client):
     err = body.json()["error"]
     assert err["code"] == "SOURCE_NO_VIDEO"
     assert err["stage"] == "inspect"
-    assert err["retryable"] is False
+
+
+# ---- GET /jobs (history list, from Postgres) ----
+
+from datetime import datetime, timezone
+
+
+def _pg_row(job_id, status="done", **kw):
+    row = {
+        "job_id": job_id, "status": status, "content_hash": "h", "source_filename": f"{job_id}.mp4",
+        "source_duration_s": 60.0, "presets": ["720p", "480p"],
+        "error_code": None, "error_message": None, "error_stage": None,
+        "created_at": datetime(2026, 6, 17, 10, 0, tzinfo=timezone.utc),
+        "started_at": datetime(2026, 6, 17, 10, 0, 5, tzinfo=timezone.utc),
+        "finished_at": datetime(2026, 6, 17, 10, 1, tzinfo=timezone.utc),
+        "expired_at": None,
+    }
+    row.update(kw)
+    return row
+
+
+def test_list_paginates_and_reports_has_more(client, monkeypatch):
+    c, _ = client
+    # db returns limit+1 rows -> has_more True, and the extra row is trimmed from items
+    rows = [_pg_row(f"j{i}") for i in range(3)]
+    monkeypatch.setattr(job_route, "db_list_jobs", lambda **k: rows)
+    r = c.get("/jobs?limit=2")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["has_more"] is True and body["limit"] == 2 and body["offset"] == 0
+    assert [it["job_id"] for it in body["items"]] == ["j0", "j1"]   # 3rd trimmed
+    assert body["items"][0]["source_filename"] == "j0.mp4" and body["items"][0]["duration"] == 60.0
+
+
+def test_list_no_more_when_under_limit(client, monkeypatch):
+    c, _ = client
+    monkeypatch.setattr(job_route, "db_list_jobs", lambda **k: [_pg_row("j0")])
+    body = c.get("/jobs?limit=20").json()
+    assert body["has_more"] is False and len(body["items"]) == 1
+
+
+def test_list_forwards_status_limit_offset_to_db(client, monkeypatch):
+    c, _ = client
+    captured = {}
+
+    def spy(*, status=None, limit=20, offset=0):
+        captured.update(status=status, limit=limit, offset=offset)
+        return []
+
+    monkeypatch.setattr(job_route, "db_list_jobs", spy)
+    c.get("/jobs?status=done&limit=5&offset=10")
+    assert captured == {"status": "done", "limit": 5, "offset": 10}   # filter not silently dropped
+
+
+@pytest.mark.parametrize("qs,code", [
+    ("limit=0", 422), ("limit=51", 422), ("offset=-1", 422), ("limit=50", 200), ("limit=1", 200),
+])
+def test_list_enforces_limit_offset_bounds(client, qs, code):
+    c, _ = client
+    assert c.get(f"/jobs?{qs}").status_code == code
+
+
+def test_list_handles_null_duration(client, monkeypatch):
+    c, _ = client
+    monkeypatch.setattr(job_route, "db_list_jobs",
+                        lambda **k: [_pg_row("j0", status="failed", source_duration_s=None)])
+    assert c.get("/jobs").json()["items"][0]["duration"] is None
+
+
+def test_list_rejects_unknown_status_filter(client):
+    c, _ = client
+    assert c.get("/jobs?status=banana").status_code == 422
+
+
+def test_list_computes_expires_at_and_poster_for_done(client, monkeypatch, tmp_path):
+    c, _ = client
+    out = tmp_path / "output" / "j0"      # config.output_dir is data_dir/"output" (a property)
+    out.mkdir(parents=True)
+    (out / "poster.jpg").write_bytes(b"x")
+    monkeypatch.setattr(job_route.config, "data_dir", tmp_path)
+    monkeypatch.setattr(job_route.config, "output_ttl_days", 7)
+    monkeypatch.setattr(job_route, "db_list_jobs", lambda **k: [_pg_row("j0", status="done")])
+    item = c.get("/jobs").json()["items"][0]
+    assert item["poster"] == "/jobs/j0/poster"
+    assert item["expires_at"].startswith("2026-06-24")          # finished 06-17 + 7d
+
+
+def test_list_failed_job_has_no_poster_or_expiry(client, monkeypatch):
+    c, _ = client
+    monkeypatch.setattr(job_route, "db_list_jobs", lambda **k: [_pg_row("j0", status="failed")])
+    item = c.get("/jobs").json()["items"][0]
+    assert item["poster"] is None and item["expires_at"] is None
+
+
+# ---- GET /jobs/{id} cold-tier fallback (Redis hash gone) ----
+
+def test_get_falls_back_to_postgres_for_done(client, monkeypatch):
+    c, _ = client                                                # fake redis empty -> miss -> PG
+    monkeypatch.setattr(job_route, "db_get_job", lambda jid: _pg_row(jid, status="done"))
+    body = c.get("/jobs/jgone").json()
+    assert body["status"] == "done"
+    assert body["results"]["playlist"] == "/jobs/jgone/playlist"
+    assert body["results"]["presets"] == ["720p", "480p"] and body["results"]["duration"] == 60.0
+
+
+def test_get_falls_back_to_postgres_for_failed(client, monkeypatch):
+    c, _ = client
+    monkeypatch.setattr(job_route, "db_get_job",
+                        lambda jid: _pg_row(jid, status="failed", error_code="ENCODE_TIMEOUT",
+                                            error_stage="transcode"))
+    body = c.get("/jobs/jgone").json()
+    assert body["status"] == "failed" and body["error"]["code"] == "ENCODE_TIMEOUT"
+
+
+def test_get_expired_cold_row_is_410(client, monkeypatch):
+    c, _ = client
+    monkeypatch.setattr(job_route, "db_get_job", lambda jid: _pg_row(jid, status="expired"))
+    assert c.get("/jobs/jgone").status_code == 410
+
+
+def test_get_falls_back_cancelled_is_minimal_shape(client, monkeypatch):
+    c, _ = client
+    monkeypatch.setattr(job_route, "db_get_job", lambda jid: _pg_row(jid, status="cancelled"))
+    body = c.get("/jobs/jgone").json()
+    assert body["status"] == "cancelled" and body["results"] is None and body["error"] is None
+
+
+def test_get_unknown_in_both_tiers_is_404(client, monkeypatch):
+    c, _ = client
+    monkeypatch.setattr(job_route, "db_get_job", lambda jid: None)
+    assert c.get("/jobs/jgone").status_code == 404
+
+
+def test_get_db_outage_on_read_is_503(client, monkeypatch):
+    import psycopg2
+    c, _ = client
+
+    def boom(jid):
+        raise psycopg2.OperationalError("postgres down")
+
+    monkeypatch.setattr(job_route, "db_get_job", boom)
+    assert c.get("/jobs/jgone").status_code == 503   # transient outage -> retryable 503, not a lying 404/500

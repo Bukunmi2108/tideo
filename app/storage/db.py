@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 
 import psycopg2
 from psycopg2 import errors as pg_errors
-from psycopg2.extras import Json
+from psycopg2.extras import Json, RealDictCursor
 
 from app.core.config import config
 
@@ -150,6 +150,34 @@ def init_schema() -> None:
         return
     try:
         ensure_schema(conn)
+    finally:
+        conn.close()
+
+
+def get_job(job_id: str) -> dict | None:
+    """Terminal row for a job, or None. Errors propagate — a read failure must not look like 'no such job'."""
+    conn = psycopg2.connect(config.postgres_dsn)
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("SELECT * FROM jobs WHERE job_id = %s", (job_id,))
+            return cur.fetchone()
+    finally:
+        conn.close()
+
+
+def list_jobs(*, status: str | None = None, limit: int = 20, offset: int = 0) -> list:
+    """Cold history, newest-first. Fetches limit+1 so the caller computes has_more without a COUNT."""
+    conn = psycopg2.connect(config.postgres_dsn)
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            # job_id tiebreaker: created_at isn't unique, so paging could otherwise skip/dupe rows
+            if status:
+                cur.execute("SELECT * FROM jobs WHERE status = %s ORDER BY created_at DESC, job_id DESC "
+                            "LIMIT %s OFFSET %s", (status, limit + 1, offset))
+            else:
+                cur.execute("SELECT * FROM jobs ORDER BY created_at DESC, job_id DESC LIMIT %s OFFSET %s",
+                            (limit + 1, offset))
+            return cur.fetchall()
     finally:
         conn.close()
 

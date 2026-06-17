@@ -7,6 +7,7 @@ from fastapi.responses import JSONResponse
 from app.api.errors import ApiError
 from app.api.routes import upload, job, artifacts, admin
 from app.core.config import config
+from psycopg2 import InterfaceError, OperationalError
 from app.events.admin import ensure_topics
 from app.events.producer import flush_producer
 from app.storage.db import init_schema
@@ -51,6 +52,17 @@ DEPENDENCIES = [
 async def _api_error(request, exc):
     return JSONResponse(status_code=exc.status, content={"error": {
         "code": exc.code, "message": exc.message, "job_id": exc.job_id, "retryable": exc.retryable}})
+
+async def _db_unavailable(request, exc):
+    # transient DB outage on a read -> retryable 503; non-transient psycopg2 errors fall through to 500
+    logger.warning("postgres unavailable on read: %s", exc)
+    return JSONResponse(status_code=503, content={"error": {
+        "code": "DB_UNAVAILABLE", "message": "service temporarily unavailable, retry shortly",
+        "job_id": None, "retryable": True}})
+
+app.add_exception_handler(OperationalError, _db_unavailable)
+app.add_exception_handler(InterfaceError, _db_unavailable)
+
 
 @app.exception_handler(Exception)
 async def _unhandled(request, exc):

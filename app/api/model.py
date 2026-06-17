@@ -40,11 +40,8 @@ def _safe_loads(raw: str | None, field: str, job_id: str):
         return None
 
 
-def results_view(job_id: str, rec: dict) -> dict:
-    """Artifact URL set for a `done` job, by route convention. No disk read; degrades to []/None on missing metadata."""
-    presets = _safe_loads(rec.get("presets"), "presets", job_id) or []
-    sm = _safe_loads(rec.get("source_meta"), "source_meta", job_id)
-    duration = sm.get("duration") if isinstance(sm, dict) else None
+def _results_payload(job_id: str, presets: list, duration) -> dict:
+    """Artifact URL set for a `done` job, by route convention. No disk read."""
     return {
         "playlist": f"/jobs/{job_id}/playlist",
         "web_mp4": f"/jobs/{job_id}/file",
@@ -54,3 +51,36 @@ def results_view(job_id: str, rec: dict) -> dict:
         "presets": presets,
         "duration": duration,
     }
+
+
+def results_view(job_id: str, rec: dict) -> dict:
+    """From the hot Redis hash; degrades to []/None on missing metadata."""
+    presets = _safe_loads(rec.get("presets"), "presets", job_id) or []
+    sm = _safe_loads(rec.get("source_meta"), "source_meta", job_id)
+    duration = sm.get("duration") if isinstance(sm, dict) else None
+    return _results_payload(job_id, presets, duration)
+
+
+def results_view_pg(job_id: str, row: dict) -> dict:
+    """From a cold Postgres row (presets already a list; duration a NUMERIC -> float)."""
+    duration = row.get("source_duration_s")
+    return _results_payload(job_id, row.get("presets") or [],
+                            float(duration) if duration is not None else None)
+
+
+class JobSummary(BaseModel):
+    job_id: str
+    status: str
+    source_filename: str | None = None
+    duration: float | None = None
+    created_at: str | None = None
+    finished_at: str | None = None
+    expires_at: str | None = None
+    poster: str | None = None
+
+
+class JobListResponse(BaseModel):
+    items: list[JobSummary]
+    limit: int
+    offset: int
+    has_more: bool

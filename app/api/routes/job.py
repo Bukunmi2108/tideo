@@ -1,12 +1,15 @@
 import json
 import shutil
-from fastapi import APIRouter
+from datetime import timedelta
+from fastapi import APIRouter, Query
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
-from app.api.model import JobResponse, progress_map, results_view
+from app.api.model import (
+    JobListResponse, JobResponse, progress_map, results_view, results_view_pg,
+)
 from app.core.config import config
 from app.storage.state import get_client
-from app.storage.db import persist_terminal
+from app.storage.db import persist_terminal, get_job as db_get_job, list_jobs as db_list_jobs
 from app.storage import paths
 from app.api.errors import ApiError
 from app.domain.state import transition
@@ -18,16 +21,77 @@ from app.workers.celery_app import app as celery_app
 
 router = APIRouter(tags=["Job"])
 
+TERMINAL_STATUSES = ("done", "failed", "cancelled", "expired")
+
+
 class TranscodeRequest(BaseModel):
     presets: list[str]
     subtitles: bool = False
 
 
+def _iso(dt) -> str | None:
+    return dt.isoformat() if dt is not None else None
+
+
+def _job_summary(row: dict) -> dict:
+    """Cold Postgres row -> history-card shape."""
+    job_id, status, finished = row["job_id"], row["status"], row.get("finished_at")
+    duration = row.get("source_duration_s")
+    poster_avail = status == "done" and (config.output_dir / job_id / "poster.jpg").exists()
+    # the 7.2 sweep deletes done jobs at finished_at + OUTPUT_TTL_DAYS — that's the countdown anchor
+    expires_at = (finished + timedelta(days=config.output_ttl_days)) if status == "done" and finished else None
+    return {
+        "job_id": job_id,
+        "status": status,
+        "source_filename": row.get("source_filename"),
+        "duration": float(duration) if duration is not None else None,
+        "created_at": _iso(row.get("created_at")),
+        "finished_at": _iso(finished),
+        "expires_at": _iso(expires_at),
+        "poster": f"/jobs/{job_id}/poster" if poster_avail else None,
+    }
+
+
+def _response_from_pg(job_id: str, row: dict) -> dict:
+    """GET /jobs/{id} response from the cold tier when the hot Redis hash is gone."""
+    status = row["status"]
+    if status == "expired":
+        raise ApiError(410, "JOB_EXPIRED", "job outputs have expired", job_id=job_id)
+    resp = {"job_id": job_id, "status": status, "source_filename": row.get("source_filename")}
+    if status == "done":
+        resp["results"] = results_view_pg(job_id, row)
+    elif status == "failed":
+        resp["error"] = {
+            "code": row.get("error_code"), "message": row.get("error_message"),
+            "stage": row.get("error_stage"), "retryable": False,
+        }
+    return resp                                              # cancelled: status only, like the hot path
+
+
+@router.get("/jobs", response_model=JobListResponse)
+async def list_jobs(
+    status: str | None = Query(None),
+    limit: int = Query(20, ge=1, le=50),
+    offset: int = Query(0, ge=0),
+):
+    if status is not None and status not in TERMINAL_STATUSES:
+        raise ApiError(422, "BAD_STATUS", f"unknown status filter: {status}")
+    rows = await run_in_threadpool(db_list_jobs, status=status, limit=limit, offset=offset)
+    has_more = len(rows) > limit
+    return {
+        "items": [_job_summary(r) for r in rows[:limit]],
+        "limit": limit, "offset": offset, "has_more": has_more,
+    }
+
+
 @router.get("/jobs/{job_id}", response_model=JobResponse)
 async def get_job(job_id: str):
     rec = await get_client().hgetall(f"job:{job_id}")
-    if not rec:
-        raise ApiError(404, "JOB_NOT_FOUND", "no such job", job_id=job_id)
+    if not rec or "status" not in rec:                   # hot state gone/torn -> fall back to the cold tier
+        row = await run_in_threadpool(db_get_job, job_id)
+        if not row:
+            raise ApiError(404, "JOB_NOT_FOUND", "no such job", job_id=job_id)
+        return _response_from_pg(job_id, row)
     status = rec["status"]
     if status == "expired":
         raise ApiError(410, "JOB_EXPIRED", "job outputs have expired", job_id=job_id)
