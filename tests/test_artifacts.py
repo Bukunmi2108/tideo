@@ -263,3 +263,35 @@ def test_subtitles_404_when_absent_on_done_job(monkeypatch, tmp_path):
 def test_subtitles_410_when_expired(monkeypatch):
     c = _client(monkeypatch, status="expired")
     assert c.get("/jobs/j1/subtitles").status_code == 410
+
+
+# ---------- storyboard (sprite geometry) ----------
+
+def test_storyboard_served_from_manifest(monkeypatch, tmp_path):
+    _seed_job(tmp_path)
+    (tmp_path / "manifest.json").write_text(
+        '{"storyboard": {"url": "sprite.jpg", "cols": 10, "rows": 4, "tiles": 40, '
+        '"tile_w": 160, "tile_h": 90, "interval": 0.75}}')
+    c = _client(monkeypatch, tmp_path=tmp_path)
+    r = c.get("/jobs/j1/storyboard")
+    assert r.status_code == 200 and r.json()["cols"] == 10 and r.json()["interval"] == 0.75
+
+
+def test_storyboard_404_without_manifest(monkeypatch, tmp_path):
+    _seed_job(tmp_path)                                  # no manifest.json written
+    c = _client(monkeypatch, tmp_path=tmp_path)
+    assert c.get("/jobs/j1/storyboard").status_code == 404
+
+
+def test_manifest_served_when_present(monkeypatch, tmp_path):
+    _seed_job(tmp_path)
+    (tmp_path / "manifest.json").write_text('{"renditions": [{"preset": "720p"}]}')
+    c = _client(monkeypatch, tmp_path=tmp_path)
+    r = c.get("/jobs/j1/manifest")
+    assert r.status_code == 200 and r.json()["renditions"][0]["preset"] == "720p"
+
+
+def test_manifest_404_without_file(monkeypatch, tmp_path):
+    _seed_job(tmp_path)
+    c = _client(monkeypatch, tmp_path=tmp_path)
+    assert c.get("/jobs/j1/manifest").status_code == 404

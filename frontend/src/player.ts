@@ -1,5 +1,7 @@
 import Hls from "hls.js";
 import { esc, humanDuration } from "./render";
+import { applySprite, showTile, tileForFraction } from "./sprite";
+import type { Storyboard } from "./api";
 
 // hls.js player with custom chrome. mount() expects origin-correct (absolute)
 // URLs so the playlist's relative segment refs resolve against the API origin.
@@ -15,12 +17,18 @@ interface Level {
 
 export function mountPlayer(
   container: HTMLElement,
-  opts: { playlist: string; poster?: string },
+  opts: {
+    playlist: string;
+    poster?: string;
+    storyboard?: Storyboard | null;
+    spriteUrl?: string;
+  },
 ): PlayerHandle {
   container.classList.add("player");
   container.innerHTML = `
     <video class="player-video" playsinline ${opts.poster ? `poster="${esc(opts.poster)}"` : ""}></video>
     <div class="player-error" hidden></div>
+    <div class="pl-preview" hidden><div class="pl-preview-img"></div><span class="pl-preview-time">0:00</span></div>
     <div class="player-chrome">
       <button class="pl-btn pl-play" aria-label="Play">▶</button>
       <input class="pl-seek" type="range" min="0" max="1000" value="0" aria-label="Seek" />
@@ -48,10 +56,38 @@ export function mountPlayer(
   const ccBtn = container.querySelector<HTMLButtonElement>(".pl-cc")!;
   const fullBtn = container.querySelector<HTMLButtonElement>(".pl-full")!;
   const errEl = container.querySelector<HTMLDivElement>(".player-error")!;
+  const preview = container.querySelector<HTMLDivElement>(".pl-preview")!;
+  const previewImg =
+    container.querySelector<HTMLDivElement>(".pl-preview-img")!;
+  const previewTime =
+    container.querySelector<HTMLSpanElement>(".pl-preview-time")!;
 
   let hls: Hls | null = null;
   let levels: Level[] = [];
   let seeking = false;
+
+  // ---- seek storyboard: hover the scrubber to see the frame, from Tideo's sprite sheet ----
+  const sb = opts.storyboard;
+  if (sb && opts.spriteUrl) {
+    applySprite(previewImg, sb, opts.spriteUrl);
+    previewImg.style.aspectRatio = `${sb.tile_w} / ${sb.tile_h}`;
+    const dur = () =>
+      Number.isFinite(video.duration) && video.duration > 0
+        ? video.duration
+        : sb.interval * sb.tiles;
+    seek.addEventListener("pointermove", (e) => {
+      const r = seek.getBoundingClientRect();
+      const f = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width));
+      showTile(previewImg, sb, tileForFraction(sb, f));
+      previewTime.textContent = humanDuration(f * dur());
+      const half = preview.offsetWidth / 2;
+      preview.style.left = `${Math.max(half + 8, Math.min(r.width - half - 8, e.clientX - r.left))}px`;
+      preview.hidden = false;
+    });
+    seek.addEventListener("pointerleave", () => {
+      preview.hidden = true;
+    });
+  }
 
   function showError(msg: string): void {
     errEl.textContent = msg;

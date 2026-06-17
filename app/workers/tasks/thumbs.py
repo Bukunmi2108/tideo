@@ -28,22 +28,35 @@ def _sprite_argv(src, plan: SpritePlan, out):
     vf = f"fps={plan.sample_fps},scale=160:-2,tile={plan.cols}x{plan.rows}"
     return ["ffmpeg", "-nostdin", "-y", "-i", src, "-vf", vf, "-frames:v", "1", out]
 
-def _verify_image(path: str) -> None:
+def _image_size(path: str) -> tuple[int, int]:
     s = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "stream=width,height",
                         "-of", "json", path], capture_output=True, text=True)
     streams = json.loads(s.stdout or "{}").get("streams", [])
     if not streams or int(streams[0].get("width", 0)) == 0:
         raise RuntimeError(f"invalid image: {path}")
+    return int(streams[0]["width"]), int(streams[0]["height"])
+
 
 def write_poster(out_dir: Path, src: str, duration: float) -> None:
     with paths.atomic_path(out_dir / "poster.jpg") as tmp:
         subprocess.run(_poster_argv(src, duration, str(tmp)), check=True)
-        _verify_image(str(tmp))
+        _image_size(str(tmp))
 
 
-def write_sprite(out_dir: Path, src: str, duration: float, fps: float) -> int:
+def write_sprite(out_dir: Path, src: str, duration: float, fps: float) -> dict:
+    """Build the scrub sprite and return its storyboard geometry — enough for a client to map a
+    timestamp to a tile (background-position) for hover-scrub previews. tile size is read back from the
+    produced sheet so it stays correct across source aspect ratios."""
     plan = sprite_plan(duration, fps or 30.0)
     with paths.atomic_path(out_dir / "sprite.jpg") as tmp:
         subprocess.run(_sprite_argv(src, plan, str(tmp)), check=True)
-        _verify_image(str(tmp))
-    return plan.tiles
+        sheet_w, sheet_h = _image_size(str(tmp))
+    return {
+        "url": "sprite.jpg",
+        "tiles": plan.tiles,
+        "cols": plan.cols,
+        "rows": plan.rows,
+        "tile_w": sheet_w // plan.cols,
+        "tile_h": sheet_h // plan.rows,
+        "interval": round(duration / plan.tiles, 4) if plan.tiles else 0,
+    }

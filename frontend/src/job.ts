@@ -1,5 +1,6 @@
 import {
   getJob,
+  getManifest,
   postTranscode,
   postCancel,
   ApiError,
@@ -7,11 +8,13 @@ import {
   type JobResponse,
   type JobError,
   type JobResults,
+  type Manifest,
 } from "./api";
 import { watch, type StateFrame } from "./live";
 import { mountPlayer, type PlayerHandle } from "./player";
 import { esc, humanDuration, humanBitrate, siteHeader } from "./render";
 import { buildPicker, estimateSeconds, type PickerRow } from "./presets";
+import { loadStoryboard, spriteUrl } from "./sprite";
 
 // Phase 5.4/5.5 — inspect/commit, then live progress and the player.
 
@@ -38,6 +41,7 @@ let committing = false;
 let commitError: string | null = null;
 let captionsWanted = false;
 let hasAudio = true;
+let jobTitle = ""; // source filename, for the watch page header
 
 // progress-view state
 let presets: string[] = [];
@@ -127,6 +131,7 @@ async function load(): Promise<void> {
 }
 
 function route(job: JobResponse): void {
+  if (job.source_filename) jobTitle = job.source_filename;
   switch (job.status) {
     case "inspecting":
       setView({ tag: "inspecting" });
@@ -493,22 +498,70 @@ function captionNote(results: JobResults): string {
 
 function cardDone(results: JobResults): string {
   const base = apiBase();
+  const title = esc(jobTitle || jobId || "your video");
+  const n = results.presets?.length ?? 0;
+  const meta = [
+    results.duration != null ? humanDuration(results.duration) : "",
+    n ? `${n} rendition${n === 1 ? "" : "s"}` : "",
+    "adaptive HLS",
+  ]
+    .filter(Boolean)
+    .join("  ·  ");
   return `
-    <div class="inspect-card done-card">
-      <div class="player-mount" id="player-mount"></div>
-      ${captionNote(results)}
-      <div class="done-actions">
-        <a class="btn btn-ghost" href="${base + results.web_mp4}" download>Download MP4</a>
-        <button class="btn btn-ghost" id="copy-master" type="button">Copy stream URL</button>
-        <a class="btn btn-ghost" href="/" >New upload</a>
-      </div>
-      <details class="embed-block">
-        <summary>Embed snippet</summary>
-        <pre class="embed-code">${esc(embedSnippet(base + results.playlist))}</pre>
-        <button class="btn btn-ghost" id="copy-embed" type="button">Copy snippet</button>
-      </details>
+    <div class="watch">
+      <section class="watch-stage">
+        <div class="player-mount" id="player-mount"></div>
+        <div class="watch-overlay">
+          <p class="watch-eyebrow">Now playing</p>
+          <h1 class="watch-title">${title}</h1>
+        </div>
+        <a class="watch-scroll" href="#watch-detail" aria-label="See details">details ↓</a>
+      </section>
+      <section class="watch-detail" id="watch-detail">
+        <div class="watch-detail-inner">
+          <div class="watch-head">
+            <div>
+              <h2 class="watch-name">${title}</h2>
+              <p class="watch-meta">${esc(meta)}<span class="watch-chip">ready</span></p>
+            </div>
+            <div class="watch-actions">
+              <a class="btn btn-primary" href="${base + results.web_mp4}" download>Download MP4</a>
+              <button class="btn btn-ghost" id="copy-master" type="button">Copy stream URL</button>
+              <a class="btn btn-ghost" href="/upload">New upload</a>
+            </div>
+          </div>
+          ${captionNote(results)}
+          <div class="ladder" id="ladder">
+            <div class="ladder-head">Rendition ladder</div>
+            <div class="ladder-rows" id="ladder-rows"><div class="ladder-loading">reading manifest…</div></div>
+          </div>
+          <details class="embed-block">
+            <summary>Embed snippet</summary>
+            <pre class="embed-code">${esc(embedSnippet(base + results.playlist))}</pre>
+            <button class="btn btn-ghost" id="copy-embed" type="button">Copy snippet</button>
+          </details>
+        </div>
+      </section>
     </div>
   `;
+}
+
+function renderLadder(m: Manifest): string {
+  const rungs = [...m.renditions].sort((a, b) => b.bandwidth - a.bandwidth);
+  const max = Math.max(1, ...rungs.map((r) => r.bandwidth));
+  return rungs
+    .map((r) => {
+      const pct = Math.round((r.bandwidth / max) * 100);
+      const vcodec = r.codecs.split(",")[0];
+      return `<div class="rung">
+        <span class="rung-label">${esc(r.preset)}</span>
+        <span class="rung-res">${esc(r.resolution.replace("x", "×"))}</span>
+        <div class="rung-bar"><div class="rung-fill" style="width:${pct}%"></div></div>
+        <span class="rung-rate">${humanBitrate(r.bandwidth)}</span>
+        <span class="rung-codec">${esc(vcodec)}</span>
+      </div>`;
+    })
+    .join("");
 }
 
 function embedSnippet(playlistUrl: string): string {
@@ -602,12 +655,31 @@ function bind(): void {
 
 function mountDonePlayer(results: JobResults): void {
   const mount = document.getElementById("player-mount");
-  if (!mount) return;
+  if (!mount || !jobId) return;
   const base = apiBase();
-  player = mountPlayer(mount, {
-    playlist: base + results.playlist,
-    poster: base + results.poster,
+  const id = jobId;
+  const myGen = gen;
+  // fetch the sprite storyboard first so the player mounts with seek-scrub wired; then the ladder.
+  void loadStoryboard(id).then((sb) => {
+    if (myGen !== gen) return;
+    mount.classList.add("player--stage");
+    player = mountPlayer(mount, {
+      playlist: base + results.playlist,
+      poster: base + results.poster,
+      storyboard: sb,
+      spriteUrl: spriteUrl(id),
+    });
   });
+  void getManifest(id)
+    .then((m) => {
+      if (myGen !== gen) return;
+      const rows = document.getElementById("ladder-rows");
+      if (rows) rows.innerHTML = renderLadder(m);
+    })
+    .catch(() => {
+      const ladder = document.getElementById("ladder");
+      if (ladder) ladder.remove(); // pre-manifest job — drop the panel rather than show a stub
+    });
 }
 
 async function copyText(text: string, btn: HTMLElement): Promise<void> {
@@ -645,6 +717,7 @@ export function mount(root: HTMLElement, query: URLSearchParams): () => void {
   commitError = null;
   captionsWanted = false;
   hasAudio = true;
+  jobTitle = "";
   presets = [];
   progress = {};
   mode = "live";

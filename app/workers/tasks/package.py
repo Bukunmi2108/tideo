@@ -90,10 +90,10 @@ def package(results, job_id: str) -> dict:
 
     low = _lowest([v.preset for v in variants])
     write_poster(job_dir, f"{job_dir}/{top}/index.m3u8", duration)
-    write_sprite(job_dir, f"{job_dir}/{low}/index.m3u8", duration, meta.get("fps") or 30.0)
+    storyboard = write_sprite(job_dir, f"{job_dir}/{low}/index.m3u8", duration, meta.get("fps") or 30.0)
 
-    manifest = build_manifest(job_id, duration, variants,
-                              web_remuxed=remuxed, created_at=cast(str, rec.get("created_at")))
+    manifest = build_manifest(job_id, duration, variants, web_remuxed=remuxed,
+                              created_at=cast(str, rec.get("created_at")), storyboard=storyboard)
     (job_dir / "manifest.json").write_text(json.dumps(manifest, indent=2))
 
     # master last, via the shared writer: includes the subtitles track iff transcription already landed

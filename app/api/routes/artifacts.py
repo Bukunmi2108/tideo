@@ -1,3 +1,4 @@
+import json
 import re
 from pathlib import Path
 from typing import cast
@@ -81,6 +82,31 @@ async def subtitle_playlist(job_id: str):
     if not path.exists():
         raise ApiError(404, "NOT_READY", "subtitles not available", job_id)
     return Response(path.read_text(), media_type=HLS_MIME, headers={"Cache-Control": NO_CACHE})
+
+
+@router.get("/jobs/{job_id}/manifest")
+async def manifest(job_id: str):
+    """The result manifest: the rendition ladder (resolution, measured bandwidth, codecs), poster/sprite
+    refs, web_remuxed. The watch page reads it to render the spec ladder. 404 until packaging writes it."""
+    job_dir = await _guard(job_id)
+    path = job_dir / "manifest.json"
+    if not path.exists():
+        raise ApiError(404, "NOT_READY", "manifest not available", job_id)
+    return Response(path.read_text(), media_type="application/json", headers={"Cache-Control": SHORT})
+
+
+@router.get("/jobs/{job_id}/storyboard")
+async def storyboard(job_id: str):
+    """Sprite-sheet geometry (cols/rows/tile size/interval) so the player + cards can map a timestamp
+    to a tile for hover-scrub previews. Read from the manifest; 404 until packaging has written it."""
+    job_dir = await _guard(job_id)
+    path = job_dir / "manifest.json"
+    if not path.exists():
+        raise ApiError(404, "NOT_READY", "storyboard not available", job_id)
+    sb = json.loads(path.read_text()).get("storyboard")
+    if not sb:
+        raise ApiError(404, "NOT_READY", "storyboard not available", job_id)
+    return Response(json.dumps(sb), media_type="application/json", headers={"Cache-Control": SHORT})
 
 
 @router.get("/jobs/{job_id}/subtitles")

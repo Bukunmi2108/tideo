@@ -57,7 +57,7 @@ def build_subtitle_media_playlist(duration: float) -> str:
     ]) + "\n"
 
 def build_manifest(job_id: str, duration: float, variants: list[Variant],
-                   *, web_remuxed: bool, created_at: str | None) -> dict:
+                   *, web_remuxed: bool, created_at: str | None, storyboard: dict | None = None) -> dict:
     """Machine-readable result summary. Schema is a contract: the API `done` response, the frontend,
     and dedupe's lazy-verify all read it. Pure -> assertable."""
     return {
@@ -70,5 +70,6 @@ def build_manifest(job_id: str, duration: float, variants: list[Variant],
         "web_remuxed": web_remuxed,
         "poster": "poster.jpg",
         "sprite": "sprite.jpg",
+        "storyboard": storyboard,
         "created_at": created_at,
     }

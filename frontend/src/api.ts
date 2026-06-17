@@ -136,6 +136,46 @@ export function getJob(jobId: string): Promise<JobResponse> {
   return request<JobResponse>(`/jobs/${jobId}`);
 }
 
+export interface Storyboard {
+  url: string; // sprite sheet, relative to the job (served at /jobs/{id}/sprite)
+  tiles: number;
+  cols: number;
+  rows: number;
+  tile_w: number;
+  tile_h: number;
+  interval: number; // seconds of video per tile
+}
+
+export function getStoryboard(
+  jobId: string,
+  signal?: AbortSignal,
+): Promise<Storyboard> {
+  return request<Storyboard>(`/jobs/${jobId}/storyboard`, { signal });
+}
+
+export interface Rendition {
+  preset: string;
+  bandwidth: number; // measured bits/s
+  resolution: string; // "1920x1080"
+  codecs: string; // "avc1.640028,mp4a.40.2"
+}
+
+export interface Manifest {
+  job_id: string;
+  duration: number;
+  renditions: Rendition[];
+  web_remuxed: boolean;
+  storyboard: Storyboard | null;
+  created_at: string | null;
+}
+
+export function getManifest(
+  jobId: string,
+  signal?: AbortSignal,
+): Promise<Manifest> {
+  return request<Manifest>(`/jobs/${jobId}/manifest`, { signal });
+}
+
 export function listJobs(
   opts: { status?: string; limit?: number; offset?: number } = {},
   signal?: AbortSignal,

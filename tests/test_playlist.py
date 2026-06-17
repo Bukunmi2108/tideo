@@ -63,9 +63,12 @@ def test_build_master_uses_actual_resolution_for_portrait():
 
 def test_manifest_schema():
     v = [Variant("720p", 2156000, 1280, 720, "avc1.64001f,mp4a.40.2")]
-    m = build_manifest("j1", 30.0, v, web_remuxed=True, created_at="2026-06-16T00:00:00+00:00")
+    m = build_manifest("j1", 30.0, v, web_remuxed=True, created_at="2026-06-16T00:00:00+00:00",
+                       storyboard={"url": "sprite.jpg", "tiles": 100, "cols": 10, "rows": 10,
+                                   "tile_w": 160, "tile_h": 90, "interval": 0.3})
     assert set(m) == {"job_id", "duration", "renditions", "master", "web_mp4",
-                      "web_remuxed", "poster", "sprite", "created_at"}
+                      "web_remuxed", "poster", "sprite", "storyboard", "created_at"}
+    assert m["storyboard"]["cols"] == 10
     assert m["master"] == "master.m3u8" and m["web_mp4"] == "web.mp4"
     assert m["renditions"][0] == {
         "preset": "720p", "bandwidth": 2156000,
