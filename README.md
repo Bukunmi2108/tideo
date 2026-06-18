@@ -59,23 +59,6 @@ Two brokers, on purpose — the project is a deliberate study of distributed-sys
 - **Redis** holds hot state and streams progress over pub/sub to the browser via WebSocket; **Postgres**
   is the cold store for terminal jobs, per-rendition outcomes, and the event audit log.
 
-## Notable engineering
-
-- **Content-hash dedupe** — sha256 computed during the upload stream; the same bytes are claimed once
-  and never re-transcoded (`app/storage/dedupe.py`).
-- **Adaptive ladder, honest bitrates** — rungs recommended by source height; HLS `BANDWIDTH` is computed
-  from the **actually measured** output bytes, not the config target (`app/domain/ladder.py`).
-- **Scrubbable storyboard** — a ~100-tile sprite sheet drives hover-scrub on cards and seek-preview in
-  the player (`app/workers/tasks/thumbs.py`).
-- **Retry taxonomy** — errors classified permanent vs. transient from FFmpeg stderr; transient retries
-  back off with full jitter, exhausted ones land in a dead-letter queue (`app/workers/retry.py`).
-- **Fail-soft captions** — local `faster-whisper` (OpenAI fallback) runs *alongside* the encode chord,
-  so a caption failure never sinks the video (`app/workers/subtitles.py`).
-- **Source reclaim** — a refcount tracks the packagers and transcriber sharing one upload; the last one
-  out deletes it (`app/workers/source.py`).
-- **Footprint-based load shedding** — new work is shed when Tideo's *own* uploads+outputs reach a budget
-  or the disk truly runs low, not on a shared host's used-% (`app/storage/pressure.py`).
-
 ## Stack
 
 | Area | What | Tech |
