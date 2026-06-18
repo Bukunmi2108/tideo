@@ -1,7 +1,7 @@
 # Tideo
 
 **Upload one video, get back an adaptive-quality stream.** Tideo turns a single source file into a
-full HLS ladder — every resolution encoded in parallel, with poster, scrubbable storyboard, an embed
+full HLS ladder - every resolution encoded in parallel, with poster, scrubbable storyboard, an embed
 player, and optional captions. It's the thing YouTube does in the first minutes after an upload, built
 as a real distributed pipeline you can run, break, and watch scale.
 
@@ -34,7 +34,7 @@ fans back into a single HLS package, and the job goes `done`.
 <p align="center">
   <img src="assets/screenshots/inspect.png" width="540" alt="Inspect & commit — pick your renditions" />
   <br />
-  <em>The commit step: Tideo probes the source, greys out rungs it won't upscale, and lets you choose.</em>
+  <em>Tideo probes the source, greys out rungs it won't upscale, and lets you choose.</em>
 </p>
 
 ## Architecture
