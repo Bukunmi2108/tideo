@@ -1,5 +1,5 @@
 import { listJobs, type JobSummary } from "./api";
-import { siteHeader } from "./render";
+import { siteHeader, siteFooter } from "./render";
 import {
   applySprite,
   loadStoryboard,
@@ -91,7 +91,8 @@ export function mount(root: HTMLElement): () => void {
     <main class="lp-main">
       ${hero()}
       ${howItWorks()}
-    </main>`;
+    </main>
+    ${siteFooter()}`;
 
   // hydrate the hero screen with a real job's sprite, auto-advancing like a preview
   const film = root.querySelector<HTMLElement>("#film");

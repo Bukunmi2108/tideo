@@ -195,6 +195,36 @@ a:focus-visible,
   color: var(--text);
 }
 
+/* ---- Colophon ------------------------------------------------------------- */
+
+.colophon {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 2rem clamp(1.25rem, 4vw, 2.5rem) 2.5rem;
+  border-top: 1px solid var(--border);
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--text-xdim);
+}
+
+.colophon .gh {
+  color: var(--text-dim);
+  text-decoration: none;
+  border-bottom: 1px solid var(--border);
+  transition:
+    color var(--transition),
+    border-color var(--transition);
+}
+
+.colophon .gh:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
 /* ---- Buttons -------------------------------------------------------------- */
 
 .btn {

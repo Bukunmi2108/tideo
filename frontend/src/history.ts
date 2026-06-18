@@ -5,6 +5,7 @@ import {
   relativeTime,
   expiresIn,
   siteHeader,
+  siteFooter,
 } from "./render";
 import {
   applySprite,
@@ -106,7 +107,8 @@ export function mount(root: HTMLElement): () => void {
   root.innerHTML = `${siteHeader()}
     <main class="hist-main">
       <div class="hist-body">${skeletonGrid()}</div>
-    </main>`;
+    </main>
+    ${siteFooter()}`;
   const body = root.querySelector(".hist-body") as HTMLElement;
 
   // Hover-scrub: each playable card flips through its sprite while pointed at — Tideo previewing itself.

@@ -1,10 +1,13 @@
 import asyncio
 from contextlib import asynccontextmanager
+from pathlib import Path
 from fastapi import FastAPI, Response, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
+from fastapi.responses import FileResponse, JSONResponse
 from app.api.errors import ApiError
-from app.api.routes import upload, job, artifacts, admin, status
+from app.api.routes import upload, job, artifacts, admin
+from app.api.routes import status as status_routes
 from app.core.config import config
 from psycopg2 import InterfaceError, OperationalError
 from app.core.logging import configure_logging, get_logger
@@ -25,7 +28,38 @@ async def lifespan(_: FastAPI):
     flush_producer()
 
 
-app = FastAPI(title="Tideo", version="0.0.1", lifespan=lifespan)
+FAVICON = Path(__file__).parent / "static" / "favicon.ico"
+DOCS_TITLE = "Tideo — adaptive video transcoding"
+
+app = FastAPI(
+    title="Tideo",
+    version="0.0.1",
+    summary="Distributed video transcoding — one source file into an adaptive HLS ladder, encoded in parallel.",
+    lifespan=lifespan,
+    docs_url=None,
+    redoc_url=None,
+)
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon():
+    return FileResponse(FAVICON)
+
+
+@app.get("/docs", include_in_schema=False)
+async def swagger_ui():
+    return get_swagger_ui_html(
+        openapi_url=app.openapi_url or "/openapi.json", title=DOCS_TITLE,
+        swagger_favicon_url="/favicon.ico",
+    )
+
+
+@app.get("/redoc", include_in_schema=False)
+async def redoc_ui():
+    return get_redoc_html(
+        openapi_url=app.openapi_url or "/openapi.json", title=DOCS_TITLE,
+        redoc_favicon_url="/favicon.ico",
+    )
 
 app.add_middleware(
     CORSMiddleware,
@@ -39,7 +73,7 @@ app.include_router(upload.router)
 app.include_router(job.router)
 app.include_router(artifacts.router)
 app.include_router(admin.router)
-app.include_router(status.router)
+app.include_router(status_routes.router)
 app.include_router(ws_module.router)
 
 # (name, host, port) for every dependency /readyz probes.

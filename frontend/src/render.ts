@@ -82,3 +82,11 @@ export function siteHeader(): string {
     </nav>
   </header>`;
 }
+
+export function siteFooter(): string {
+  return `<footer class="colophon">
+    <span>tideo</span><span aria-hidden="true">·</span>
+    <span>adaptive video, on demand</span><span aria-hidden="true">·</span>
+    <a class="gh" href="https://github.com/Bukunmi2108/tideo" target="_blank" rel="noopener">source&nbsp;↗</a>
+  </footer>`;
+}

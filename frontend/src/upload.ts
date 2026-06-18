@@ -1,6 +1,6 @@
 import { apiBase, type UploadResponse } from "./api";
 import { navigate } from "./router";
-import { esc, humanBytes, siteHeader } from "./render";
+import { esc, humanBytes, siteHeader, siteFooter } from "./render";
 
 // ---- State ----------------------------------------------------------------
 
@@ -79,7 +79,7 @@ export function mount(root: HTMLElement): () => void {
   }
 
   function render(): void {
-    root.innerHTML = `${siteHeader()}<main class="upload-main">${card()}</main>`;
+    root.innerHTML = `${siteHeader()}<main class="upload-main">${card()}</main>${siteFooter()}`;
     bind();
   }
 
