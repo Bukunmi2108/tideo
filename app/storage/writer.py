@@ -5,16 +5,12 @@ from anyio.to_thread import run_sync
 
 from app.api.errors import UploadTooLarge
 
-# Batch chunks to this size before handing the (blocking) hash+write to a worker thread, so a big
-# upload doesn't stall other requests on the event loop. ~1 MB keeps the thread-hop count low while
-# capping in-flight memory.
 FLUSH_BYTES = 1 << 20
 
 
 async def stream_to_disk(chunks, dest: Path, max_bytes: int) -> tuple[str, int]:
-    """One pass: hash + count + write. Enforces max_bytes mid-stream; cleans the partial on
-    over-limit. The hash/write run off the event loop (batched) so concurrent requests aren't
-    blocked. Returns (sha256_hex, total_bytes)."""
+    """One pass: hash + count + write off the event loop. Enforces max_bytes mid-stream and cleans the
+    partial on over-limit. Returns (sha256_hex, total_bytes)."""
     dest.parent.mkdir(parents=True, exist_ok=True)
     sha = hashlib.sha256()
     total = 0
@@ -28,7 +24,7 @@ async def stream_to_disk(chunks, dest: Path, max_bytes: int) -> tuple[str, int]:
         with open(dest, "wb") as f:
             async for chunk in chunks:
                 total += len(chunk)
-                if total > max_bytes:                  # cheap arithmetic gate, stays on the loop
+                if total > max_bytes:
                     raise UploadTooLarge()
                 buf += chunk
                 if len(buf) >= FLUSH_BYTES:

@@ -94,11 +94,11 @@ services:
     env_file:
       - kafka.env
     healthcheck:
-      test: ["CMD-SHELL", "kafka-topics --bootstrap-server localhost:9092 --list || exit 1"]
+      test: ["CMD-SHELL", "echo > /dev/tcp/localhost/9092 || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 40s 
+      start_period: 180s
     volumes:
       - kafka_data:/var/lib/kafka
     networks:

@@ -32,14 +32,19 @@ async def _jobs_section() -> dict:
 
 
 async def _disk_section() -> dict:
-    pct = round((await run_in_threadpool(_safe_disk_pct)), 1)
-    return {"used_pct": pct, "watermark_pct": config.storage_watermark_pct,
-            "shedding": pct >= config.storage_watermark_pct}
+    return await run_in_threadpool(_disk_snapshot)
 
 
-def _safe_disk_pct() -> float:
-    from app.storage.pressure import usage_pct
-    return usage_pct()
+def _disk_snapshot() -> dict:
+    from app.storage.pressure import free_bytes, is_shedding, our_usage_bytes
+    try:
+        used, free = our_usage_bytes(), free_bytes()
+        return {"used_bytes": used, "budget_bytes": config.storage_budget_bytes,
+                "free_bytes": free, "shedding": is_shedding(used, free)}
+    except OSError:
+        log.warning("disk_probe_failed")
+        return {"used_bytes": None, "budget_bytes": config.storage_budget_bytes,
+                "free_bytes": None, "shedding": False}
 
 
 async def _dispatcher_section() -> dict:

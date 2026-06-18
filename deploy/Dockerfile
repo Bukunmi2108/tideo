@@ -28,11 +28,9 @@ ARG STT_MODEL=base
 ENV HF_HOME=/opt/models
 RUN python -c "from faster_whisper import WhisperModel; WhisperModel('${STT_MODEL}', device='cpu', compute_type='int8')"
 
-# HF Spaces run the container as uid 1000. Own the heavy static dirs BEFORE copying app code so that
-# editing deploy/ doesn't re-run the big recursive chown.
 RUN useradd -m -u 1000 user \
  && mkdir -p /data /data/logs /data/home \
- && chown -R user:user /opt/venv /opt/kafka /opt/models \
+ && chown -R user:user /opt/models \
  && chmod -R 777 /data
 
 COPY --chown=user:user app/ ./app/
