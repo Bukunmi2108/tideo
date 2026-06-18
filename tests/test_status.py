@@ -70,7 +70,7 @@ async def _ok_kafka():
 
 
 async def _ok_disk():
-    return {"used_pct": 12.3, "watermark_pct": 85, "shedding": False}
+    return {"used_bytes": 1500, "budget_bytes": 10**10, "free_bytes": 10**9, "shedding": False}
 
 
 @pytest.fixture
@@ -94,7 +94,8 @@ def test_status_aggregates_all_sections(client):
     assert body["dispatcher"]["alive"] is True
     assert body["queues"] == {"transcode": 4, "inspect": 0}
     assert body["kafka_lag"] == {"dispatcher": 0, "audit": 2}
-    assert body["disk"]["used_pct"] == 12.3
+    assert body["disk"] == {"used_bytes": 1500, "budget_bytes": 10**10,
+                            "free_bytes": 10**9, "shedding": False}
 
 
 def test_status_degrades_one_section_without_failing_the_rest(client, monkeypatch):
