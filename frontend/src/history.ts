@@ -183,7 +183,7 @@ export function mount(root: HTMLElement): () => void {
       const msg =
         e instanceof ApiError && e.retryable
           ? "Service busy — try again shortly."
-          : "Couldn't load history.";
+          : "The API may be waking up. Refresh shortly if this takes more than a minute.";
       body.innerHTML = `<div class="hist-empty"><p class="hist-empty-sub">${esc(msg)}</p></div>`;
     }
   }

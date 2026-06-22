@@ -1,6 +1,7 @@
 import { apiBase, type UploadResponse } from "./api";
 import { navigate } from "./router";
 import { esc, humanBytes, siteHeader, siteFooter } from "./render";
+import { waitForBackendReady } from "./wake";
 
 // ---- State ----------------------------------------------------------------
 
@@ -63,6 +64,8 @@ export function mount(root: HTMLElement): () => void {
   let state: State = { tag: "idle" };
   let dragCount = 0;
   let currentXhr: XMLHttpRequest | null = null;
+  let currentWake: AbortController | null = null;
+  let uploadSeq = 0;
   const ac = new AbortController();
   const { signal } = ac;
 
@@ -126,8 +129,9 @@ export function mount(root: HTMLElement): () => void {
     return `
       <div class="upload-card">
         <div class="upload-icon">${iconSpinner()}</div>
-        <p class="upload-headline">Waking up…</p>
-        <p class="upload-sub">The demo is starting, please wait.</p>
+        <p class="upload-headline">Waking the backend…</p>
+        <p class="upload-sub">The API can sleep after idle time. Your upload will start automatically when it is ready.</p>
+        <button class="btn btn-ghost" id="cancel-wake-btn" type="button">Cancel</button>
       </div>`;
   }
 
@@ -166,6 +170,15 @@ export function mount(root: HTMLElement): () => void {
     root.querySelector("#cancel-btn")?.addEventListener("click", () => {
       currentXhr?.abort();
       currentXhr = null;
+      currentWake?.abort();
+      currentWake = null;
+      uploadSeq++;
+      setState({ tag: "idle" });
+    });
+    root.querySelector("#cancel-wake-btn")?.addEventListener("click", () => {
+      currentWake?.abort();
+      currentWake = null;
+      uploadSeq++;
       setState({ tag: "idle" });
     });
     root
@@ -191,7 +204,37 @@ export function mount(root: HTMLElement): () => void {
       });
       return;
     }
-    startUpload(file, 0);
+    void wakeAndUpload(file);
+  }
+
+  async function wakeAndUpload(file: File): Promise<void> {
+    const mySeq = ++uploadSeq;
+    currentXhr?.abort();
+    currentWake?.abort();
+    const wake = new AbortController();
+    currentWake = wake;
+    setState({ tag: "waking", file, attempt: 0 });
+
+    const ready = await waitForBackendReady({
+      signal: wake.signal,
+      onAttempt: (attempt) => {
+        if (mySeq === uploadSeq && !wake.signal.aborted)
+          setState({ tag: "waking", file, attempt });
+      },
+    });
+    if (mySeq !== uploadSeq || wake.signal.aborted) return;
+    currentWake = null;
+
+    if (ready) {
+      startUpload(file, 0);
+    } else {
+      setState({
+        tag: "rejected",
+        code: "NETWORK_ERROR",
+        message:
+          "The backend did not become ready. Try again shortly.",
+      });
+    }
   }
 
   function startUpload(file: File, attempt: number): void {
@@ -327,6 +370,7 @@ export function mount(root: HTMLElement): () => void {
 
   return () => {
     ac.abort(); // removes every signal-bound listener
+    currentWake?.abort();
     currentXhr?.abort();
     fileInput.remove();
     document.body.classList.remove("drag-active");

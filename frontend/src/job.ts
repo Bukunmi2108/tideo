@@ -120,12 +120,16 @@ async function load(): Promise<void> {
     if (errorAttempts >= MAX_ERROR_RETRIES) {
       return setView({
         tag: "error",
-        message: "Couldn’t load this job. Check your connection and refresh.",
+        message:
+          "The backend may still be waking up. Refresh in a moment.",
       });
     }
     const delay = Math.min(2 ** errorAttempts * 1000, 8000);
     errorAttempts++;
-    setView({ tag: "error", message: "Couldn’t load this job. Retrying…" });
+    setView({
+      tag: "error",
+      message: "The backend may be waking up. Retrying…",
+    });
     pollTimer = setTimeout(() => void load(), delay);
   }
 }
