@@ -26,4 +26,3 @@ hf upload "$SPACE" "$STAGE" . --repo-type space \
   --commit-message "deploy: full-stack single-container image"
 
 echo "✓ pushed. Build + logs: https://huggingface.co/spaces/$SPACE"
-echo "  Remember: set ADMIN_TOKEN in Settings → Secrets."

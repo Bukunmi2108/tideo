@@ -48,7 +48,6 @@ class Config(BaseSettings):
     openai_api_key: str = ""
     stt_api_base: str = "https://api.openai.com/v1"
 
-    admin_token: str = Field(min_length=1)
     profile: Literal["dev", "deploy"] = "dev"
     log_level: str = "INFO"
 

@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
 from fastapi.responses import FileResponse, JSONResponse
 from app.api.errors import ApiError
-from app.api.routes import upload, job, artifacts, admin
+from app.api.routes import upload, job, artifacts
 from app.api.routes import status as status_routes
 from app.core.config import config
 from psycopg2 import InterfaceError, OperationalError
@@ -72,7 +72,6 @@ app.add_middleware(
 app.include_router(upload.router)
 app.include_router(job.router)
 app.include_router(artifacts.router)
-app.include_router(admin.router)
 app.include_router(status_routes.router)
 app.include_router(ws_module.router)
 

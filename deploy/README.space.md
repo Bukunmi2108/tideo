@@ -21,6 +21,4 @@ all under `supervisord`, exposed on port 7860.
 - **Web app:** the Vercel frontend (set `VITE_API_BASE` to this Space URL).
 - **Ephemeral:** disk resets on restart; demo outputs live ~24h. Cold starts show a "waking up" state.
 
-Set `ADMIN_TOKEN` in the Space **Settings → Secrets**; it gates all `/admin/*` routes.
-
 Source + architecture: https://github.com/Bukunmi2108/tideo
