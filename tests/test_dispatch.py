@@ -1,6 +1,7 @@
 import json
 
 from app.dispatcher import dispatch
+from app.storage.job_control import DispatchReservation
 
 
 class FakeRedis:
@@ -44,30 +45,51 @@ class FakeRedis:
         self.kv[k] = v
         return True
 
+    def exists(self, k):
+        return k in self.kv
+
     def expire(self, k, ttl):
         return True
+
+    def eval(self, script, key_count, *args):
+        job_key, _counts, expected, target, _old_active, _new_active, *extra = args
+        rec = self.hashes[job_key]
+        if rec.get("status") != expected:
+            return [0, rec.get("status", "")]
+        rec["status"] = target
+        rec.update(dict(zip(extra[::2], extra[1::2], strict=True)))
+        return [1, target]
 
 
 SRC_META = json.dumps({"fps": 30.0, "duration": 30.0, "has_audio": True})
 
 
-# ---------- build_and_fire_chord ----------
+def reserve_in_fake(fake):
+    def reserve(_r, job_id, plan):
+        rec = fake.hashes[f"job:{job_id}"]
+        if rec.get("status") != "queued":
+            return DispatchReservation("skipped", rec.get("status"), None)
+        rec.update({
+            "dispatch_event_id": plan.event_id,
+            "rendition_ids": json.dumps(plan.rendition_ids),
+            "chord_callback_id": plan.callback_id,
+            "transcribe_id": plan.transcribe_id or "",
+        })
+        return DispatchReservation("reserved", "queued", plan)
+    return reserve
 
 def test_chord_caps_to_dev_max_renditions(monkeypatch):
-    fake = FakeRedis({"source_path": "/u/source.mp4", "source_meta": SRC_META})
+    fake = FakeRedis({"status": "queued", "source_path": "/u/source.mp4", "source_meta": SRC_META})
     monkeypatch.setattr(dispatch, "get_sync_client", lambda: fake)
     monkeypatch.setattr(dispatch.config, "dev_max_renditions", 2)
+    monkeypatch.setattr(dispatch, "reserve_dispatch", reserve_in_fake(fake))
+    task_ids = iter(["r0", "r1", "cb-1"])
+    monkeypatch.setattr(dispatch, "uuid", lambda: next(task_ids))
 
     captured = {}
-    # chord(header)(callback) -> fake AsyncResult with .id and .parent.children
-    class Res:
-        id = "cb-1"
-        class parent:
-            children = [type("C", (), {"id": "r0"}), type("C", (), {"id": "r1"})]
-
     def fake_chord(header):
         captured["header_len"] = len(list(header))
-        return lambda cb: Res()
+        return lambda cb: None
 
     monkeypatch.setattr(dispatch, "chord", fake_chord)
     monkeypatch.setattr(dispatch, "group", lambda gen: list(gen))   # countable header
@@ -75,38 +97,127 @@ def test_chord_caps_to_dev_max_renditions(monkeypatch):
     monkeypatch.setattr(dispatch.celery_app, "signature",
                         lambda *a, **k: type("S", (), {"set": lambda self, **kw: self})())
 
-    dispatch.build_and_fire_chord("j1", ["1080p", "720p", "480p", "360p"])  # 4 requested
+    result = dispatch.dispatch_job(
+        "j1", "evt-1", ["1080p", "720p", "480p", "360p"], False,
+    )
+    assert result == "dispatched"
     assert captured["header_len"] == 2                       # renditions only, capped to dev_max
     assert fake.hashes["job:j1"]["chord_callback_id"] == "cb-1"
     assert json.loads(fake.hashes["job:j1"]["rendition_ids"]) == ["r0", "r1"]
 
 
-# ---------- maybe_dispatch_transcribe (ADR-4: alongside, not in, the chord) ----------
+def test_cancelled_job_is_not_dispatched(monkeypatch):
+    fake = FakeRedis({"status": "cancelled", "source_path": "/u/source.mp4", "source_meta": SRC_META})
+    monkeypatch.setattr(dispatch, "get_sync_client", lambda: fake)
+    monkeypatch.setattr(dispatch, "reserve_dispatch", reserve_in_fake(fake))
+    monkeypatch.setattr(
+        dispatch,
+        "chord",
+        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("cancelled job must not dispatch")),
+    )
+
+    assert dispatch.dispatch_job("j1", "evt-1", ["720p"], False) == "skipped"
+
 
 def test_transcribe_dispatched_alongside_and_marked_processing(monkeypatch):
-    fake = FakeRedis({"source_path": "/u/s.mp4", "source_meta": SRC_META})
+    fake = FakeRedis({"status": "queued", "source_path": "/u/s.mp4", "source_meta": SRC_META})
     monkeypatch.setattr(dispatch, "get_sync_client", lambda: fake)
+    monkeypatch.setattr(dispatch, "reserve_dispatch", reserve_in_fake(fake))
+    task_ids = iter(["r0", "cb", "stt"])
+    monkeypatch.setattr(dispatch, "uuid", lambda: next(task_ids))
     fired = []
 
     class Sig:
+        def set(self, **kwargs):
+            fired.append(("set", kwargs))
+            return self
+
         def apply_async(self):
             fired.append("async")
 
     monkeypatch.setattr(dispatch.celery_app, "signature",
                         lambda name, args=None: fired.append((name, args)) or Sig())
+    monkeypatch.setattr(dispatch, "group", lambda gen: list(gen))
+    monkeypatch.setattr(dispatch, "chord", lambda header: lambda callback: None)
 
-    dispatch.maybe_dispatch_transcribe("j1", True)
+    dispatch.dispatch_job("j1", "evt-1", ["720p"], True)
     assert json.loads(fake.hashes["job:j1"]["subtitles"]) == {"status": "processing"}
-    assert fired[0] == ("app.workers.tasks.transcribe.transcribe", ["j1", "/u/s.mp4", json.loads(SRC_META)])
+    assert ("app.workers.tasks.transcribe.transcribe", ["j1", "/u/s.mp4", json.loads(SRC_META)]) in fired
+    assert ("set", {"task_id": "stt"}) in fired
     assert "async" in fired                                   # actually enqueued
 
 
 def test_no_transcribe_when_subtitles_not_requested(monkeypatch):
-    fake = FakeRedis({"source_path": "/u/s.mp4", "source_meta": SRC_META})
+    fake = FakeRedis({"status": "queued", "source_path": "/u/s.mp4", "source_meta": SRC_META})
     monkeypatch.setattr(dispatch, "get_sync_client", lambda: fake)
+    monkeypatch.setattr(dispatch, "reserve_dispatch", reserve_in_fake(fake))
+    task_ids = iter(["r0", "cb"])
+    monkeypatch.setattr(dispatch, "uuid", lambda: next(task_ids))
+
+    class Sig:
+        def set(self, **kwargs):
+            return self
+
+    names = []
     monkeypatch.setattr(dispatch.celery_app, "signature",
-                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not dispatch")))
-    dispatch.maybe_dispatch_transcribe("j1", False)
+                        lambda name, **_k: names.append(name) or Sig())
+    monkeypatch.setattr(dispatch, "group", lambda gen: list(gen))
+    monkeypatch.setattr(dispatch, "chord", lambda header: lambda callback: None)
+
+    dispatch.dispatch_job("j1", "evt-1", ["720p"], False)
+    assert "subtitles" not in fake.hashes["job:j1"]
+    assert dispatch.TRANSCRIBE not in names
+
+
+def test_post_chord_transcribe_failure_does_not_redispatch_ladder(monkeypatch):
+    fake = FakeRedis({"status": "queued", "source_path": "/u/s.mp4", "source_meta": SRC_META})
+    monkeypatch.setattr(dispatch, "get_sync_client", lambda: fake)
+    monkeypatch.setattr(dispatch, "reserve_dispatch", reserve_in_fake(fake))
+    task_ids = iter(["r0", "cb", "stt"])
+    monkeypatch.setattr(dispatch, "uuid", lambda: next(task_ids))
+
+    class Sig:
+        def set(self, **kwargs):
+            return self
+
+    submitted = []
+    monkeypatch.setattr(dispatch.celery_app, "signature", lambda name, **_k: Sig())
+    monkeypatch.setattr(dispatch, "group", lambda gen: list(gen))
+    monkeypatch.setattr(dispatch, "chord", lambda header: lambda callback: submitted.append("chord"))
+    monkeypatch.setattr(fake, "exists", lambda _key: (_ for _ in ()).throw(ConnectionError("redis down")))
+
+    assert dispatch.dispatch_job("j1", "evt-1", ["720p"], True) == "dispatched"
+    assert submitted == ["chord"]
+    assert json.loads(fake.hashes["job:j1"]["subtitles"])["code"] == "STT_DISPATCH_FAILED"
+
+
+def test_transcribe_is_not_submitted_when_cancel_wins_after_chord_reservation(monkeypatch):
+    fake = FakeRedis({"status": "queued", "source_path": "/u/s.mp4", "source_meta": SRC_META})
+    monkeypatch.setattr(dispatch, "get_sync_client", lambda: fake)
+    monkeypatch.setattr(dispatch, "reserve_dispatch", reserve_in_fake(fake))
+    task_ids = iter(["r0", "cb", "stt"])
+    monkeypatch.setattr(dispatch, "uuid", lambda: next(task_ids))
+
+    class Sig:
+        def set(self, **kwargs):
+            return self
+
+    names = []
+    monkeypatch.setattr(dispatch.celery_app, "signature",
+                        lambda name, **_k: names.append(name) or Sig())
+    monkeypatch.setattr(dispatch, "group", lambda gen: list(gen))
+
+    def cancel_after_chord(_header):
+        def submit(_callback):
+            fake.hashes["job:j1"]["status"] = "cancelled"
+            fake.kv["cancel:j1"] = "1"
+        return submit
+
+    monkeypatch.setattr(dispatch, "chord", cancel_after_chord)
+
+    dispatch.dispatch_job("j1", "evt-1", ["720p"], True)
+
+    assert dispatch.TRANSCRIBE not in names
     assert "subtitles" not in fake.hashes["job:j1"]
 
 
@@ -172,8 +283,8 @@ def test_mark_started_only_first_wins(monkeypatch):
     emitted = []
     monkeypatch.setattr(rmod, "emit", lambda et, jid, p: emitted.append(et))
 
-    rmod._mark_started("j1")          # first -> transitions + emits
-    rmod._mark_started("j1")          # second -> SET NX loses, skips
+    rmod._mark_started("j1")
+    rmod._mark_started("j1")
 
     assert fake.hashes["job:j1"]["status"] == "transcoding"
     assert emitted == ["job.started"]                        # exactly once

@@ -1,7 +1,10 @@
 from celery import Celery
+
 from app.core.config import config
+from app.workers import (
+    on_worker_ready as _worker_signal_handlers,  # noqa: F401
+)
 from app.workers import routing
-from app.workers.on_worker_ready import _log_toolchain
 
 app = Celery(
     "tideo",
@@ -9,13 +12,11 @@ app = Celery(
     backend=config.celery_result_backend,
     include=[
         "app.workers.tasks.inspect",
-        "app.workers.tasks.transcode",
         "app.workers.tasks.rendition",
         "app.workers.tasks.package",
         "app.workers.tasks.transcribe",
         "app.workers.tasks.cleanup",
-        "app.workers.tasks.dispatch_stub",
-        "app.dispatcher.dispatch",                  # registers fail_job (the chord link_error handler)
+        "app.dispatcher.dispatch",
     ],
 )
 

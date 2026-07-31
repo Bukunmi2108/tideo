@@ -1,21 +1,17 @@
 import json
 from dataclasses import asdict
+
 from app.core.config import config
-from app.domain import recommend
-from app.domain.state import transition
 from app.core.logging import bind_job, get_logger
+from app.domain import recommend
 from app.storage.db import persist_terminal
-from app.storage.state import get_sync_client, write_status
+from app.storage.job_control import transition_status
+from app.storage.state import get_sync_client
 from app.workers import ffprobe
 from app.workers.base import InspectTask
 from app.workers.celery_app import app
-from typing import cast
 
 log = get_logger()
-
-
-def _current_status(r, job_id: str) -> str:
-    return cast(str, r.hget(f"job:{job_id}", "status") or "inspecting")
 
 
 @app.task(base=InspectTask)
@@ -27,26 +23,22 @@ def probe(job_id: str, src: str) -> dict:
         recommend.check_caps(meta, config.max_source_seconds)
         safe, reason = recommend.web_safe(meta)
         presets = recommend.recommended_presets(meta.height)
-        cur = _current_status(r, job_id)
-        nxt = transition(cur, "awaiting_choice", job_id=job_id, caller="inspect")
-        if nxt is None:
-            return {"status": "dropped", "job_id": job_id}
-        write_status(r, job_id, nxt, extra={
+        nxt = transition_status(r, job_id, "awaiting_choice", caller="inspect", extra={
             "source_meta": json.dumps(asdict(meta)),
             "web_safe": "true" if safe else "false",
             "web_safe_reason": reason or "",
             "recommended_presets": json.dumps(presets),
         })
+        if nxt is None:
+            return {"status": "dropped", "job_id": job_id}
         log.info("inspect_completed", presets=presets, web_safe=safe)
         return {"status": "ok", "job_id": job_id}
     except ffprobe.InspectError as e:
-        cur = _current_status(r, job_id)
-        nxt = transition(cur, "failed", job_id=job_id, caller="inspect")
-        if nxt is None:
-            return {"status": "dropped", "job_id": job_id}
-        write_status(r, job_id, nxt, extra={
+        nxt = transition_status(r, job_id, "failed", caller="inspect", extra={
             "error_code": e.code, "error_message": e.message, "error_stage": "inspect",
         })
+        if nxt is None:
+            return {"status": "dropped", "job_id": job_id}
         r.expire(f"job:{job_id}", config.output_ttl_days * 86400)
         persist_terminal(job_id, r.hgetall(f"job:{job_id}"))
         log.error("inspect_failed", code=e.code)

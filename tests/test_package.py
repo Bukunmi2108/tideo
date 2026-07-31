@@ -17,3 +17,19 @@ def test_package_is_a_noop_for_an_already_done_job(monkeypatch):
     monkeypatch.setattr(pkg.subprocess, "run", lambda *a, **k: (_ for _ in ()).throw(AssertionError("ffmpeg called")))
 
     assert pkg.package(["ignored"], "j1") == {"status": "done", "job_id": "j1"}
+
+
+def test_package_does_no_artifact_work_after_cancellation(monkeypatch):
+    class FakeRedis:
+        def hget(self, key, field):
+            return "cancelled"
+
+    fake = FakeRedis()
+    cleaned = []
+    monkeypatch.setattr(pkg, "get_sync_client", lambda: fake)
+    monkeypatch.setattr(pkg, "_cancel_package",
+                        lambda r, jid, path: cleaned.append((jid, path)) or {"status": "cancelled", "job_id": jid})
+    monkeypatch.setattr(pkg.subprocess, "run", lambda *a, **k: (_ for _ in ()).throw(AssertionError("ffmpeg called")))
+
+    assert pkg.package(["ignored"], "j1") == {"status": "cancelled", "job_id": "j1"}
+    assert cleaned and cleaned[0][0] == "j1"

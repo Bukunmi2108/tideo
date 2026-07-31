@@ -1,3 +1,5 @@
+import asyncio
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -6,40 +8,38 @@ from app.api.routes import status as st
 from app.storage import state as stmod
 
 
-# ---------- write_status: active-state counter maintenance ----------
-
 class FakeRedis:
     def __init__(self):
         self.hashes, self.counts = {}, {}
 
-    def hget(self, k, f):
+    async def hget(self, k, f):
         return self.hashes.get(k, {}).get(f)
 
-    def hset(self, k, mapping=None):
+    async def hset(self, k, mapping=None):
         self.hashes.setdefault(k, {}).update(mapping or {})
 
-    def hincrby(self, k, f, n):
+    async def hincrby(self, k, f, n):
         self.counts[f] = self.counts.get(f, 0) + n
 
 
-def test_write_status_increments_on_entering_active():
+def test_awrite_status_increments_on_entering_active():
     r = FakeRedis()
-    stmod.write_status(r, "j1", "inspecting")            # old=None -> just incr
+    asyncio.run(stmod.awrite_status(r, "j1", "inspecting"))
     assert r.counts == {"inspecting": 1}
     assert r.hashes["job:j1"]["status"] == "inspecting"
 
 
-def test_write_status_moves_count_between_active_states():
+def test_awrite_status_moves_count_between_active_states():
     r = FakeRedis()
-    stmod.write_status(r, "j1", "queued")
-    stmod.write_status(r, "j1", "transcoding")           # queued -1, transcoding +1
+    asyncio.run(stmod.awrite_status(r, "j1", "queued"))
+    asyncio.run(stmod.awrite_status(r, "j1", "transcoding"))
     assert r.counts == {"queued": 0, "transcoding": 1}
 
 
-def test_write_status_decrements_active_on_terminal_no_terminal_counter():
+def test_awrite_status_decrements_active_on_terminal_no_terminal_counter():
     r = FakeRedis()
-    stmod.write_status(r, "j1", "transcoding")
-    stmod.write_status(r, "j1", "done", extra={"results": "{}"})   # transcoding -1; done not tracked (PG owns it)
+    asyncio.run(stmod.awrite_status(r, "j1", "transcoding"))
+    asyncio.run(stmod.awrite_status(r, "j1", "done", extra={"results": "{}"}))
     assert r.counts == {"transcoding": 0}
     assert "done" not in r.counts
     assert r.hashes["job:j1"]["results"] == "{}"
@@ -110,7 +110,7 @@ def test_status_degrades_one_section_without_failing_the_rest(client, monkeypatc
 
 def test_status_dispatcher_dead_when_heartbeat_missing(monkeypatch):
     monkeypatch.setattr(st, "get_client", lambda: FakeAsyncRedis(active={}, beat=None, dlq=0))
-    monkeypatch.setattr(st.db, "count_by_status", lambda: {})
+    monkeypatch.setattr(st.db, "count_by_status", dict)
     monkeypatch.setitem(st._SECTIONS, "queues", _ok_queues)
     monkeypatch.setitem(st._SECTIONS, "kafka_lag", _ok_kafka)
     monkeypatch.setattr(st, "_cache", {"at": 0.0, "data": None})
@@ -121,7 +121,7 @@ def test_status_dispatcher_dead_when_heartbeat_missing(monkeypatch):
 def test_status_active_counts_clamp_negative_drift(monkeypatch):
     monkeypatch.setattr(st, "get_client",
                         lambda: FakeAsyncRedis(active={"queued": "-2"}, beat=None, dlq=0))
-    monkeypatch.setattr(st.db, "count_by_status", lambda: {})
+    monkeypatch.setattr(st.db, "count_by_status", dict)
     monkeypatch.setitem(st._SECTIONS, "queues", _ok_queues)
     monkeypatch.setitem(st._SECTIONS, "kafka_lag", _ok_kafka)
     monkeypatch.setattr(st, "_cache", {"at": 0.0, "data": None})

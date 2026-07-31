@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 from app.api.main import app
 from app.api.model import progress_map, results_view
 from app.api.routes import job as job_route
+from app.storage.job_control import CancelResult
 
 
 class FakeRedis:
@@ -43,6 +44,21 @@ def client(monkeypatch):
     monkeypatch.setattr(job_route, "get_client", lambda: fake)
     monkeypatch.setattr(job_route, "db_get_job", lambda jid: None)   # default: no cold row (override per test)
     monkeypatch.setattr(job_route, "db_list_jobs", lambda **k: [])   # so no test hits a real Postgres
+
+    async def cancel_job(r, job_id, *, ttl):
+        rec = r.hashes.get(f"job:{job_id}")
+        if not rec:
+            return CancelResult("missing", None)
+        status = rec["status"]
+        if status not in ("queued", "transcoding"):
+            return CancelResult("wrong_state", status)
+        rec["status"] = "cancelled"
+        r.kv[f"cancel:{job_id}"] = "1"
+        ids = json.loads(rec.get("rendition_ids") or "[]")
+        ids.extend(v for v in (rec.get("chord_callback_id"), rec.get("transcribe_id")) if v)
+        return CancelResult("cancelled", status, tuple(ids))
+
+    monkeypatch.setattr(job_route, "acancel_job", cancel_job)
     return TestClient(app, raise_server_exceptions=False), fake
 
 
@@ -195,13 +211,20 @@ def test_progress_map_extracts_only_progress_fields():
 @pytest.mark.parametrize("status", ["queued", "transcoding"])
 def test_cancel_transitions_flags_and_revokes(client, monkeypatch, tmp_path, status):
     c, fake = client
-    seed(fake, "jc", status=status, rendition_ids=json.dumps(["r0", "r1"]), chord_callback_id="cb")
+    seed(
+        fake,
+        "jc",
+        status=status,
+        rendition_ids=json.dumps(["r0", "r1"]),
+        chord_callback_id="cb",
+        transcribe_id="stt",
+    )
     revoked, published = [], []
     monkeypatch.setattr(job_route.celery_app.control, "revoke", lambda ids, **k: revoked.append((ids, k)))
     persisted = []
-    monkeypatch.setattr(job_route, "publish", lambda env: published.append(env.event_type))
+    monkeypatch.setattr(job_route, "emit", lambda event_type, *_a, **_k: published.append(event_type))
     monkeypatch.setattr(job_route, "persist_terminal", lambda jid, rec, **k: persisted.append(jid))
-    monkeypatch.setattr(job_route.paths, "output_dir", lambda jid: tmp_path)
+    monkeypatch.setattr(job_route, "_remove_cancelled_outputs", lambda jid: None)
 
     r = c.post("/jobs/jc/cancel")
 
@@ -209,7 +232,7 @@ def test_cancel_transitions_flags_and_revokes(client, monkeypatch, tmp_path, sta
     assert persisted == ["jc"]                               # durable cancelled row written
     assert fake.hashes["job:jc"]["status"] == "cancelled"
     assert fake.kv["cancel:jc"] == "1"                       # flag the running encode loop
-    assert revoked[0][0] == ["r0", "r1", "cb"]               # header + callback revoked (no terminate)
+    assert revoked[0][0] == ["r0", "r1", "cb", "stt"]
     assert "job.cancelled" in published
 
 
@@ -243,7 +266,7 @@ def test_failed_returns_error_envelope(client):
 
 # ---- GET /jobs (history list, from Postgres) ----
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 
 def _pg_row(job_id, status="done", **kw):
@@ -251,9 +274,9 @@ def _pg_row(job_id, status="done", **kw):
         "job_id": job_id, "status": status, "content_hash": "h", "source_filename": f"{job_id}.mp4",
         "source_duration_s": 60.0, "presets": ["720p", "480p"],
         "error_code": None, "error_message": None, "error_stage": None,
-        "created_at": datetime(2026, 6, 17, 10, 0, tzinfo=timezone.utc),
-        "started_at": datetime(2026, 6, 17, 10, 0, 5, tzinfo=timezone.utc),
-        "finished_at": datetime(2026, 6, 17, 10, 1, tzinfo=timezone.utc),
+        "created_at": datetime(2026, 6, 17, 10, 0, tzinfo=UTC),
+        "started_at": datetime(2026, 6, 17, 10, 0, 5, tzinfo=UTC),
+        "finished_at": datetime(2026, 6, 17, 10, 1, tzinfo=UTC),
         "expired_at": None,
     }
     row.update(kw)

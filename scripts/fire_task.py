@@ -4,8 +4,7 @@ Run inside a worker container (where the task code and fixtures are available):
     python scripts/fire_task.py <module.func> [arg ...]
 
 Examples:
-    python scripts/fire_task.py app.workers.tasks.inspect.probe fixtures/short.mp4
-    python scripts/fire_task.py app.workers.tasks.transcode.transcode j_ok fixtures/short.mp4
+    python scripts/fire_task.py app.workers.tasks.inspect.probe j_test fixtures/short.mp4
 """
 
 import importlib

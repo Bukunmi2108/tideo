@@ -1,17 +1,26 @@
+from collections.abc import Callable
+
 import httpx
 
 from app.core.config import config
-from app.domain.errors import STT_BAD_AUDIO, STT_RATE_LIMITED, STT_UNAVAILABLE, TRANSCRIBE, make_error
+from app.domain.errors import (
+    STT_BAD_AUDIO,
+    STT_RATE_LIMITED,
+    STT_UNAVAILABLE,
+    TRANSCRIBE,
+    make_error,
+)
 from app.domain.vtt import Segment
-from app.workers.stt.base import SttUpstreamError
+from app.workers.stt.base import SttCancelled, SttUpstreamError
 from app.workers.stt.retry_after import parse_retry_after
 
 
 class OpenAiProvider:
-    """OpenAI Whisper API. Maps HTTP status to the shared taxonomy: 429 -> rate-limited (honor
-    Retry-After), 5xx/timeout/connection -> unavailable (transient), 400/422 -> bad audio (permanent)."""
+    """OpenAI transcription provider."""
 
-    def transcribe(self, wav_path: str) -> list[Segment]:
+    def transcribe(self, wav_path: str, cancelled: Callable[[], bool] | None = None) -> list[Segment]:
+        if cancelled and cancelled():
+            raise SttCancelled()
         try:
             with open(wav_path, "rb") as f:
                 resp = httpx.post(
@@ -32,6 +41,9 @@ class OpenAiProvider:
         if resp.status_code in (400, 422):
             raise SttUpstreamError(make_error(STT_BAD_AUDIO, f"upstream rejected audio ({resp.status_code})", TRANSCRIBE))
         resp.raise_for_status()
+
+        if cancelled and cancelled():
+            raise SttCancelled()
 
         return [Segment(s.get("start", 0.0), s.get("end", 0.0), s.get("text", ""))
                 for s in resp.json().get("segments", [])]

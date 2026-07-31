@@ -1,9 +1,9 @@
 from app.core.config import config
-from app.workers.stt.base import SttProvider, SttUpstreamError
+from app.workers.stt.base import SttCancelled, SttProvider, SttUpstreamError
 
 
 def get_provider() -> SttProvider:
-    """Provider seam: STT_PROVIDER selects the transport; the rate-limit gate and taxonomy wrap both."""
+    """Build the configured STT provider."""
     if config.stt_provider == "openai":
         from app.workers.stt.openai_provider import OpenAiProvider
         return OpenAiProvider()
@@ -11,4 +11,4 @@ def get_provider() -> SttProvider:
     return LocalProvider()
 
 
-__all__ = ["get_provider", "SttProvider", "SttUpstreamError"]
+__all__ = ["SttCancelled", "SttProvider", "SttUpstreamError", "get_provider"]

@@ -34,6 +34,12 @@ def client(monkeypatch):
     monkeypatch.setattr(job_route, "get_client", lambda: fake)
     monkeypatch.setattr(job_route, "publish", lambda env: spy.append(env))
     monkeypatch.setattr(job_route, "under_pressure", lambda: False)   # deterministic: not shedding by default
+
+    async def transition_status(r, job_id, target, *, caller, extra=None):
+        r.hashes[f"job:{job_id}"].update({"status": target, **(extra or {})})
+        return target
+
+    monkeypatch.setattr(job_route, "atransition_status", transition_status)
     return TestClient(app, raise_server_exceptions=False), fake, spy
 
 
@@ -86,6 +92,18 @@ def test_empty_presets_is_422(client):
     seed_awaiting(fake, "j3", ["480p"])
     r = c.post("/jobs/j3/transcode", json={"presets": []})
     assert r.status_code == 422
+    assert spy == []
+
+
+def test_duplicate_presets_are_rejected_without_mutating_job(client):
+    c, fake, spy = client
+    seed_awaiting(fake, "j_dup", ["720p", "480p"])
+
+    r = c.post("/jobs/j_dup/transcode", json={"presets": ["720p", "720p"]})
+
+    assert r.status_code == 422
+    assert r.json()["error"]["code"] == "DUPLICATE_PRESET"
+    assert fake.hashes["job:j_dup"]["status"] == "awaiting_choice"
     assert spy == []
 
 

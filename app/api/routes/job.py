@@ -1,29 +1,35 @@
 import json
 import shutil
 from datetime import timedelta
+
 from fastapi import APIRouter, Query
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
+
+from app.api.errors import ApiError, StoragePressure
 from app.api.model import (
-    JobListResponse, JobResponse, progress_map, results_view, results_view_pg,
+    JobListResponse,
+    JobResponse,
+    progress_map,
+    results_view,
+    results_view_pg,
 )
 from app.core.config import config
-from app.core.logging import bind_job
-from app.storage.state import get_client, awrite_status
-from app.storage.db import persist_terminal, get_job as db_get_job, list_jobs as db_list_jobs
-from app.storage.pressure import under_pressure
-from app.storage import paths
-from app.api.errors import ApiError, StoragePressure
-from app.domain.state import transition
+from app.core.logging import bind_job, get_logger
+from app.domain.state import TERMINAL, IllegalTransition
 from app.events.envelope import Envelope
-from app.events.producer import publish
-from app.events.topics import JOB_CREATED, JOB_CANCELLED
+from app.events.producer import emit, publish
+from app.events.topics import JOB_CANCELLED, JOB_CREATED
+from app.storage.db import get_job as db_get_job
+from app.storage.db import list_jobs as db_list_jobs
+from app.storage.db import persist_terminal
+from app.storage.job_control import acancel_job, atransition_status
+from app.storage.pressure import under_pressure
+from app.storage.state import get_client
 from app.workers.celery_app import app as celery_app
 
-
 router = APIRouter(tags=["Job"])
-
-TERMINAL_STATUSES = ("done", "failed", "cancelled", "expired")
+log = get_logger()
 
 
 class TranscodeRequest(BaseModel):
@@ -31,12 +37,22 @@ class TranscodeRequest(BaseModel):
     subtitles: bool = False
 
 
+def _duplicates(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    duplicates: set[str] = set()
+    for value in values:
+        if value in seen:
+            duplicates.add(value)
+        seen.add(value)
+    return sorted(duplicates)
+
+
 def _iso(dt) -> str | None:
     return dt.isoformat() if dt is not None else None
 
 
 def _job_summary(row: dict) -> dict:
-    """Cold Postgres row -> history-card shape."""
+    """Build a history summary."""
     job_id, status, finished = row["job_id"], row["status"], row.get("finished_at")
     duration = row.get("source_duration_s")
     poster_avail = status == "done" and (config.output_dir / job_id / "poster.jpg").exists()
@@ -55,7 +71,7 @@ def _job_summary(row: dict) -> dict:
 
 
 def _response_from_pg(job_id: str, row: dict) -> dict:
-    """GET /jobs/{id} response from the cold tier when the hot Redis hash is gone."""
+    """Build a job response from Postgres."""
     status = row["status"]
     if status == "expired":
         raise ApiError(410, "JOB_EXPIRED", "job outputs have expired", job_id=job_id)
@@ -76,7 +92,7 @@ async def list_jobs(
     limit: int = Query(20, ge=1, le=50),
     offset: int = Query(0, ge=0),
 ):
-    if status is not None and status not in TERMINAL_STATUSES:
+    if status is not None and status not in TERMINAL:
         raise ApiError(422, "BAD_STATUS", f"unknown status filter: {status}")
     rows = await run_in_threadpool(db_list_jobs, status=status, limit=limit, offset=offset)
     has_more = len(rows) > limit
@@ -129,6 +145,10 @@ async def transcode(job_id: str, body: TranscodeRequest):
                        f"job is {rec['status']}, not awaiting_choice", job_id=job_id)
 
     recommended = json.loads(rec["recommended_presets"])
+    duplicates = _duplicates(body.presets)
+    if duplicates:
+        raise ApiError(422, "DUPLICATE_PRESET",
+                       f"duplicate presets: {duplicates}", job_id=job_id)
     bad = [p for p in body.presets if p not in recommended]
     if not body.presets or bad:
         raise ApiError(422, "PRESET_NOT_RECOMMENDED",
@@ -136,12 +156,17 @@ async def transcode(job_id: str, body: TranscodeRequest):
     if under_pressure():                                   # gate new encode work; in-flight jobs are untouched
         raise StoragePressure()
 
-    nxt = transition("awaiting_choice", "queued", job_id=job_id, caller="transcode")
-    assert nxt is not None
-    await awrite_status(r, job_id, nxt, extra={
-        "presets": json.dumps(body.presets),
-        "subtitles": "true" if body.subtitles else "false",
-    })
+    try:
+        nxt = await atransition_status(r, job_id, "queued", caller="transcode", extra={
+            "presets": json.dumps(body.presets),
+            "subtitles": "true" if body.subtitles else "false",
+        })
+    except IllegalTransition:
+        current = await r.hget(f"job:{job_id}", "status")
+        raise ApiError(409, "WRONG_STATE", f"job is {current}, not awaiting_choice", job_id=job_id)
+    if nxt is None:
+        current = await r.hget(f"job:{job_id}", "status")
+        raise ApiError(409, "WRONG_STATE", f"job is {current}, not awaiting_choice", job_id=job_id)
 
     duration = json.loads(rec["source_meta"]).get("duration")
     publish(Envelope(JOB_CREATED, job_id, {
@@ -154,26 +179,38 @@ async def transcode(job_id: str, body: TranscodeRequest):
 async def cancel(job_id: str):
     bind_job(job_id)
     r = get_client()
-    rec = await r.hgetall(f"job:{job_id}")
-    if not rec:
+    result = await acancel_job(r, job_id, ttl=config.output_ttl_days * 86400)
+    if result.outcome == "missing":
         raise ApiError(404, "JOB_NOT_FOUND", "no such job", job_id=job_id)
-    if rec["status"] not in ("queued", "transcoding"):
-        raise ApiError(409, "WRONG_STATE", f"job is {rec['status']}, not cancellable", job_id=job_id)
+    if result.outcome == "wrong_state":
+        raise ApiError(409, "WRONG_STATE",
+                       f"job is {result.previous_status}, not cancellable", job_id=job_id)
 
-    nxt = transition(rec["status"], "cancelled", job_id=job_id, caller="cancel")
-    assert nxt is not None
-    await r.set(f"cancel:{job_id}", "1", ex=3600)          # flag the running encode loop to kill FFmpeg
-    await awrite_status(r, job_id, nxt)
-    await r.expire(f"job:{job_id}", config.output_ttl_days * 86400)
-    await run_in_threadpool(persist_terminal, job_id, await r.hgetall(f"job:{job_id}"))
+    try:
+        rec = await r.hgetall(f"job:{job_id}")
+        await run_in_threadpool(persist_terminal, job_id, rec)
+    except Exception:
+        log.exception("cancel_persist_failed")
 
-    ids = json.loads(rec.get("rendition_ids") or "[]")
-    if rec.get("chord_callback_id"):
-        ids.append(rec["chord_callback_id"])
-    if ids:
-        celery_app.control.revoke(ids)
+    if result.task_ids:
+        try:
+            celery_app.control.revoke(list(result.task_ids))
+        except Exception:
+            log.exception("cancel_revoke_failed", task_count=len(result.task_ids))
 
-    publish(Envelope(JOB_CANCELLED, job_id, {}))
-    await r.publish(f"progress:{job_id}", json.dumps({"event": "terminal"}))  # wake a live WS relay
-    shutil.rmtree(paths.output_dir(job_id), ignore_errors=True)               # job won't ship; drop partials
-    return {"job_id": job_id, "status": nxt}
+    emit(JOB_CANCELLED, job_id, {})
+    try:
+        await r.publish(f"progress:{job_id}", json.dumps({"event": "terminal"}))
+    except Exception:
+        log.exception("cancel_ws_wake_failed")
+    await run_in_threadpool(_remove_cancelled_outputs, job_id)
+    return {"job_id": job_id, "status": "cancelled"}
+
+
+def _remove_cancelled_outputs(job_id: str) -> None:
+    try:
+        shutil.rmtree(config.output_dir / job_id)
+    except FileNotFoundError:
+        pass
+    except OSError:
+        log.exception("cancel_output_cleanup_failed")

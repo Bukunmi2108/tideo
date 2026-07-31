@@ -1,29 +1,30 @@
 import json
+import shutil
 import subprocess
 from html import escape
 from typing import cast
+
+from redis.exceptions import RedisError
+
 from app.core.config import config
 from app.core.logging import bind_job, get_logger
 from app.domain.ladder import PRESETS
 from app.domain.playlist import Variant, avc1_codec, bandwidth, build_manifest
-from app.domain.state import transition
+from app.domain.state import TERMINAL
 from app.events.producer import emit
 from app.events.topics import JOB_COMPLETED
 from app.storage import paths
 from app.storage.db import persist_terminal
-from app.storage.state import get_sync_client, write_status
+from app.storage.job_control import transition_status
+from app.storage.state import get_sync_client
 from app.workers.base import PackageTask
+from app.workers.cancellation import is_cancelled
 from app.workers.celery_app import app
 from app.workers.source import release_source
 from app.workers.subtitles import refresh_master
 from app.workers.tasks.thumbs import write_poster, write_sprite
 
 log = get_logger()
-
-
-@app.task(base=PackageTask)
-def noop() -> str:
-    return "package ok"
 
 
 def _probe_variant(seg_path: str) -> dict:
@@ -52,7 +53,7 @@ def _lowest(presets: list[str]) -> str:
 
 
 def _web_mp4(src: str, out: str, *, web_safe: bool, top: str) -> bool:
-    """web.mp4: remux (-c copy) when web-safe, else re-encode at the top rung. Returns whether remuxed."""
+    """Build web.mp4 and return whether it was remuxed."""
     if web_safe:
         argv = ["ffmpeg", "-nostdin", "-y", "-i", src, "-c", "copy", "-movflags", "+faststart", out]
     else:
@@ -68,29 +69,41 @@ def _web_mp4(src: str, out: str, *, web_safe: bool, top: str) -> bool:
 
 @app.task(base=PackageTask)
 def package(results, job_id: str) -> dict:
-    """Chord callback: assemble master.m3u8 + web.mp4 + manifest, then mark the job done.
-    Fires once all renditions succeed; the chord prepends their results as the first arg."""
+    """Package successful renditions."""
     bind_job(job_id)
     results = results if isinstance(results, list) else [results]
     r = get_sync_client()
-    if cast(str, r.hget(f"job:{job_id}", "status")) == "done":
-        return {"status": "done", "job_id": job_id}
+    current = cast(str, r.hget(f"job:{job_id}", "status")) or ""
+    if current in TERMINAL:
+        if current == "cancelled":
+            _cancel_package(r, job_id, config.output_dir / job_id)
+        return {"status": current, "job_id": job_id}
     rec = r.hgetall(f"job:{job_id}")
     meta = json.loads(rec["source_meta"])
     duration = meta["duration"]
     job_dir = paths.output_dir(job_id)
 
+    if is_cancelled(job_id):
+        return _cancel_package(r, job_id, job_dir)
+
     renditions = [res for res in results if "preset" in res]   # thumbs result has no "preset"
     variants = [_variant(str(job_dir), res["preset"], res["output_bytes"], duration) for res in renditions]
 
     top = _highest([v.preset for v in variants])
+    if is_cancelled(job_id):
+        return _cancel_package(r, job_id, job_dir)
     remuxed = _web_mp4(cast(str, rec["source_path"]), str(job_dir / "web.mp4"),
                        web_safe=(rec.get("web_safe") == "true"), top=top)
     log.info("web_mp4_built", mode="remux" if remuxed else "reencode")
 
     low = _lowest([v.preset for v in variants])
+    if is_cancelled(job_id):
+        return _cancel_package(r, job_id, job_dir)
     write_poster(job_dir, f"{job_dir}/{top}/index.m3u8", duration)
     storyboard = write_sprite(job_dir, f"{job_dir}/{low}/index.m3u8", duration, meta.get("fps") or 30.0)
+
+    if is_cancelled(job_id):
+        return _cancel_package(r, job_id, job_dir)
 
     manifest = build_manifest(job_id, duration, variants, web_remuxed=remuxed,
                               created_at=cast(str, rec.get("created_at")), storyboard=storyboard)
@@ -109,12 +122,10 @@ def package(results, job_id: str) -> dict:
     )
 
     # terminal: done + results refs + job.completed + durable Postgres row.
-    cur = cast(str, r.hget(f"job:{job_id}", "status")) or ""
-    nxt = transition(cur, "done", job_id=job_id, caller="package")
+    nxt = transition_status(r, job_id, "done", caller="package", extra={
+        "results": json.dumps({"master": "master.m3u8", "web_mp4": "web.mp4", "manifest": "manifest.json"}),
+    })
     if nxt:
-        write_status(r, job_id, nxt, extra={
-            "results": json.dumps({"master": "master.m3u8", "web_mp4": "web.mp4", "manifest": "manifest.json"}),
-        })
         r.expire(f"job:{job_id}", config.output_ttl_days * 86400)   # hot state yields to Postgres after the window
         persist_terminal(job_id, r.hgetall(f"job:{job_id}"), results=results)
         release_source(r, job_id, "package")   # reclaim the upload once transcribe is also done with it
@@ -124,4 +135,21 @@ def package(results, job_id: str) -> dict:
         })
         # poke the progress channel so a live WS relay wakes and detects the terminal status
         r.publish(f"progress:{job_id}", json.dumps({"event": "terminal"}))
+    else:
+        return _cancel_package(r, job_id, job_dir)
     return {"status": nxt, "job_id": job_id, "master": "master.m3u8"}
+
+
+def _cancel_package(r, job_id: str, job_dir) -> dict:
+    try:
+        shutil.rmtree(job_dir)
+    except FileNotFoundError:
+        pass
+    except OSError:
+        log.exception("cancel_output_cleanup_failed")
+    try:
+        release_source(r, job_id, "package")
+    except (RedisError, OSError):
+        log.warning("source_release_failed")
+    log.info("package_cancelled")
+    return {"status": "cancelled", "job_id": job_id}

@@ -25,5 +25,6 @@ def test_all_queues_declared():
 
 def test_routes_point_at_expected_queues():
     routes = app.conf.task_routes
-    for lane in ("inspect", "transcode", "package", "transcribe", "cleanup"):
+    for lane in ("inspect", "package", "transcribe", "cleanup"):
         assert routes[f"app.workers.tasks.{lane}.*"]["queue"] == lane
+    assert routes["app.workers.tasks.rendition.*"]["queue"] == "transcode"

@@ -1,40 +1,50 @@
-import json, os, signal, subprocess, threading, time
+import json
+import os
+import shutil
+import signal
+import subprocess
+import threading
+import time
 from collections import deque
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import NoReturn, cast
-from celery.exceptions import Ignore, SoftTimeLimitExceeded
+
+from celery.exceptions import SoftTimeLimitExceeded
+from redis.exceptions import RedisError
+
 from app.core.logging import bind_job, get_logger
-from app.domain.errors import TideoError, classify, make_error, ENCODE_TIMEOUT, TRANSCODE
-from app.domain.state import transition
-from app.events.producer import emit
-from app.events.topics import JOB_STARTED, RENDITION_STARTED, RENDITION_COMPLETED, RENDITION_FAILED
-from app.storage import paths
-from app.storage.state import get_sync_client, write_status
+from app.domain.errors import (
+    ENCODE_TIMEOUT,
+    TRANSCODE,
+    TideoError,
+    classify,
+    make_error,
+)
 from app.domain.ladder import PRESETS
+from app.domain.state import IllegalTransition
+from app.events.producer import emit
+from app.events.topics import (
+    JOB_STARTED,
+    RENDITION_COMPLETED,
+    RENDITION_FAILED,
+    RENDITION_STARTED,
+)
+from app.storage import paths
+from app.storage.job_control import transition_status
+from app.storage.state import get_sync_client
+from app.workers.base import TranscodeTask
+from app.workers.cancellation import JobCancelled, is_cancelled
+from app.workers.celery_app import app
 from app.workers.ffmpeg import build_rendition_argv
 from app.workers.ffprobe import SourceMeta
 from app.workers.progress import Throttle, parse_progress_blocks, percent
-from app.workers.base import TranscodeTask
 from app.workers.retry import backoff_seconds, max_retries_for
-from app.workers.celery_app import app
 
 log = get_logger()
 
 
-class Cancelled(Exception):
-    pass
-
-
-def _is_cancelled(job_id: str) -> bool:
-    try:
-        return bool(get_sync_client().exists(f"cancel:{job_id}"))
-    except Exception:
-        return False
-
-
 def _terminate_group(proc: subprocess.Popen) -> None:
-    """Kill FFmpeg's whole process group (it ran in its own session) — SIGTERM, then SIGKILL
-    after a grace period. Revoking the Celery task alone leaves FFmpeg an orphan."""
+    """Terminate FFmpeg's process group."""
     try:
         pgid = os.getpgid(proc.pid)
     except ProcessLookupError:
@@ -48,20 +58,19 @@ def _terminate_group(proc: subprocess.Popen) -> None:
 
 
 def _store_error(job_id: str, err: TideoError, stderr: str = "") -> None:
-    """Record the classified failure on the hash (status stays transcoding; fail_job transitions). Fail-open."""
+    """Store a rendition error."""
     try:
         get_sync_client().hset(f"job:{job_id}", mapping={
             "error_code": err.code, "error_message": err.message, "error_stage": err.stage,
             "error_stderr": stderr[-4000:],
         })
-    except Exception:
+    except (RedisError, OSError):
         log.warning("error_store_failed")
 
 
 def _handle_failure(task, job_id: str, preset_name: str, err: TideoError, stderr: str = "") -> NoReturn:
-    """Retry a retryable failure with full-jitter backoff; on exhaustion or a permanent
-    error, emit the failed fact and raise so the chord fails the job (ADR-3)."""
-    attempt = task.request.retries  # 0 on the first run
+    """Retry or raise a rendition failure."""
+    attempt = task.request.retries
     limit = max_retries_for(err)
     if attempt < limit:
         delay = backoff_seconds(attempt)
@@ -73,32 +82,46 @@ def _handle_failure(task, job_id: str, preset_name: str, err: TideoError, stderr
     raise RuntimeError(err.code)
 
 
-def _mark_started(job_id):
-    """First rendition to begin flips queued->transcoding and emits job.started, exactly once.
-    SET NX picks the single winner; parallel siblings skip (no illegal re-transition / dup event)."""
+def _mark_started(job_id) -> bool:
+    """Mark the first rendition as started."""
     r = get_sync_client()
-    if not r.set(f"started:{job_id}", "1", nx=True):
-        return
-    cur = cast(str, r.hget(f"job:{job_id}", "status")) or ""
-    nxt = transition(cur, "transcoding", job_id=job_id, caller="rendition")
+    try:
+        nxt = transition_status(
+            r,
+            job_id,
+            "transcoding",
+            caller="rendition",
+            extra={"started_at": datetime.now(UTC).isoformat()},
+        )
+    except IllegalTransition:
+        return cast(str, r.hget(f"job:{job_id}", "status")) == "transcoding"
     if nxt:
-        write_status(r, job_id, nxt, extra={"started_at": datetime.now(timezone.utc).isoformat()})
-        created = r.hget(f"job:{job_id}", "created_at")
-        qw = round((datetime.now(timezone.utc) - datetime.fromisoformat(created)).total_seconds(), 1) if created else None
+        created = cast(str | None, r.hget(f"job:{job_id}", "created_at"))
+        qw = round((datetime.now(UTC) - datetime.fromisoformat(created)).total_seconds(), 1) if created else None
         log.info("job_started", queue_wait_seconds=qw)   # enqueue->first-encode latency (8.3 metric)
         emit(JOB_STARTED, job_id, {})
+        return True
+    return False
 
 def _write_progress(job_id, preset, pct):
-    """Fail-OPEN: a Redis hiccup must not kill the encode."""
+    """Write rendition progress."""
     try:
         r = get_sync_client()
         r.hset(f"job:{job_id}", f"progress:{preset}", f"{pct:.1f}")
         r.publish(f"progress:{job_id}", json.dumps({"preset": preset, "percent": pct}))
-    except Exception:
+    except (RedisError, OSError):
         log.warning("progress_write_failed", preset=preset)
 
+
+def _remove_rendition(path, *, job_id: str, preset: str) -> None:
+    try:
+        shutil.rmtree(path)
+    except FileNotFoundError:
+        pass
+    except OSError:
+        log.exception("cancel_output_cleanup_failed", job_id=job_id, preset=preset)
+
 def _encode(argv, *, duration, on_pct, cancelled):
-    # own session -> own process group, so _terminate_group can take FFmpeg (and any children) down
     proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                             text=True, bufsize=1, start_new_session=True)
     assert proc.stdout is not None and proc.stderr is not None   # guaranteed by PIPE
@@ -115,9 +138,11 @@ def _encode(argv, *, duration, on_pct, cancelled):
                 last_check = now
                 if cancelled():
                     _terminate_group(proc)
-                    raise Cancelled()
+                    raise JobCancelled()
         proc.wait()
-    except (SoftTimeLimitExceeded, Cancelled):
+        if cancelled():
+            raise JobCancelled()
+    except (SoftTimeLimitExceeded, JobCancelled):
         _terminate_group(proc)
         raise
     drain.join(timeout=1)
@@ -126,26 +151,35 @@ def _encode(argv, *, duration, on_pct, cancelled):
 @app.task(bind=True, base=TranscodeTask)
 def rendition(self, job_id: str, preset_name: str, src: str, meta: dict) -> dict:
     bind_job(job_id)
+    if is_cancelled(job_id):
+        return {"status": "cancelled", "job_id": job_id}
     m = SourceMeta(**meta)
     preset = PRESETS[preset_name]
     log.info("rendition_started", preset=preset_name)
     emit(RENDITION_STARTED, job_id, {"preset": preset_name})
-    _mark_started(job_id)                                # first rendition flips job -> transcoding
+    if not _mark_started(job_id):
+        return {"status": "cancelled", "job_id": job_id}
     throttle = Throttle()
     final = paths.output_dir(job_id) / preset_name
     started = time.monotonic()
     try:
         with paths.atomic_dir(final) as tmp:
             argv = build_rendition_argv(m, preset, src, str(tmp), progress=True)
+            if is_cancelled(job_id):
+                raise JobCancelled()
             rc, stderr = _encode(
                 argv, duration=m.duration,
                 on_pct=lambda p: throttle.should_emit(p) and _write_progress(job_id, preset_name, p),
-                cancelled=lambda: _is_cancelled(job_id),
+                cancelled=lambda: is_cancelled(job_id),
             )
             if rc != 0:
                 err = classify(rc, stderr, stage=TRANSCODE)
                 log.error("rendition_failed", preset=preset_name, code=err.code, returncode=rc, stderr=stderr)
                 _handle_failure(self, job_id, preset_name, err, stderr)  # retries or raises (tmp cleaned by atomic_dir)
+            if is_cancelled(job_id):
+                raise JobCancelled()
+        if is_cancelled(job_id):
+            raise JobCancelled()
         _write_progress(job_id, preset_name, 100.0)          # confirmed success -> 100
         out_bytes = sum(f.stat().st_size for f in final.glob("*.ts"))
         secs = round(time.monotonic() - started, 1)
@@ -155,9 +189,10 @@ def rendition(self, job_id: str, preset_name: str, src: str, meta: dict) -> dict
         emit(RENDITION_COMPLETED, job_id,
              {"preset": preset_name, "output_bytes": out_bytes, "encode_seconds": secs})
         return {"status": "ok", "preset": preset_name, "output_bytes": out_bytes, "encode_seconds": secs}
-    except Cancelled:
+    except JobCancelled:
+        _remove_rendition(final, job_id=job_id, preset=preset_name)
         log.info("rendition_cancelled", preset=preset_name)
-        raise Ignore()  # job already marked cancelled by the API; don't fail it via link_error
+        return {"status": "cancelled", "job_id": job_id}
     except SoftTimeLimitExceeded:
         err = make_error(ENCODE_TIMEOUT, "encode exceeded the time limit", TRANSCODE)
         _handle_failure(self, job_id, preset_name, err)

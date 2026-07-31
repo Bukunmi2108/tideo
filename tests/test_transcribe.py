@@ -2,7 +2,13 @@ import pytest
 from celery.exceptions import Retry
 
 from app.core.ratelimit import Allowed, RetryIn
-from app.domain.errors import (STT_BAD_AUDIO, STT_RATE_LIMITED, STT_UNAVAILABLE, TRANSCRIBE, make_error)
+from app.domain.errors import (
+    STT_BAD_AUDIO,
+    STT_RATE_LIMITED,
+    STT_UNAVAILABLE,
+    TRANSCRIBE,
+    make_error,
+)
 from app.domain.vtt import Segment
 from app.workers.stt.base import SttUpstreamError
 from app.workers.tasks import transcribe as T
@@ -58,7 +64,7 @@ class FakeProvider:
     def __init__(self, segments=None, exc=None):
         self._segments, self._exc = segments, exc
 
-    def transcribe(self, wav_path):
+    def transcribe(self, wav_path, cancelled=None):
         if self._exc:
             raise self._exc
         return self._segments
@@ -69,6 +75,7 @@ def harness(tmp_path, monkeypatch):
     redis = FakeRedis()
     status_writes = []
     monkeypatch.setattr(T, "get_sync_client", lambda: redis)
+    monkeypatch.setattr(T, "is_cancelled", lambda _jid: False)
     monkeypatch.setattr(T, "acquire", lambda *a, **k: Allowed())
     monkeypatch.setattr(T, "extract_audio", lambda src, out: None)
     monkeypatch.setattr(T, "attach_subtitles", lambda jid, dur: True)
@@ -89,6 +96,18 @@ def test_no_audio_short_circuits_without_an_upstream_call(harness, monkeypatch):
     out = T.transcribe("j", "/src.mp4", NO_AUDIO_META)
     assert out == {"status": "none"}
     assert writes[-1]["status"] == "none"
+
+
+def test_cancelled_job_never_calls_provider_or_writes_vtt(harness, monkeypatch):
+    job_dir, _, writes = harness
+    monkeypatch.setattr(T, "is_cancelled", lambda _jid: True, raising=False)
+    monkeypatch.setattr(T, "get_provider", lambda: (_ for _ in ()).throw(AssertionError("provider called")))
+
+    out = T.transcribe("j", "/src.mp4", AUDIO_META)
+
+    assert out == {"status": "cancelled"}
+    assert not (job_dir / "subtitles.vtt").exists()
+    assert writes[-1]["status"] == "cancelled"
 
 
 def test_rate_limit_reenqueues_with_countdown(harness, monkeypatch):
