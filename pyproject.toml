@@ -1,7 +1,7 @@
 [project]
 name = "tideo"
 version = "0.1.0"
-description = "Add your description here"
+description = "Distributed video transcoding into adaptive HLS ladders"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
