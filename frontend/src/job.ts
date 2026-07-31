@@ -530,6 +530,7 @@ function cardDone(results: JobResults): string {
             </div>
             <div class="watch-actions">
               <a class="btn btn-primary" href="${base + results.web_mp4}" download>Download MP4</a>
+              <button class="btn btn-ghost" id="share-player" type="button">Share video</button>
               <button class="btn btn-ghost" id="copy-master" type="button">Copy stream URL</button>
               <a class="btn btn-ghost" href="/upload">New upload</a>
             </div>
@@ -637,6 +638,18 @@ function bind(): void {
   if (view.tag === "done") {
     const base = apiBase();
     document
+      .getElementById("share-player")
+      ?.addEventListener("click", (e) =>
+        void shareVideo(
+          new URL(
+            base + (view as Extract<View, { tag: "done" }>).results.player,
+            window.location.href,
+          ).href,
+          jobTitle || "Tideo video",
+          e.currentTarget as HTMLElement,
+        ),
+      );
+    document
       .getElementById("copy-master")
       ?.addEventListener("click", (e) =>
         copyText(
@@ -693,11 +706,32 @@ function mountDonePlayer(results: JobResults): void {
     });
 }
 
-async function copyText(text: string, btn: HTMLElement): Promise<void> {
+async function shareVideo(
+  url: string,
+  title: string,
+  btn: HTMLElement,
+): Promise<void> {
+  if (typeof navigator.share === "function") {
+    try {
+      await navigator.share({ title, url });
+      return;
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") return;
+      // A failed native share still has a useful clipboard fallback.
+    }
+  }
+  await copyText(url, btn, "Link copied!");
+}
+
+async function copyText(
+  text: string,
+  btn: HTMLElement,
+  success = "Copied!",
+): Promise<void> {
   const prev = btn.textContent;
   try {
     await navigator.clipboard.writeText(text);
-    btn.textContent = "Copied!";
+    btn.textContent = success;
   } catch {
     btn.textContent = "Copy failed — press ⌘/Ctrl-C"; // clipboard blocked (insecure ctx / denied)
   }
