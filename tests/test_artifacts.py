@@ -5,7 +5,6 @@ from app.api.main import app
 from app.api.routes import artifacts as art_route
 from app.domain.playlist import Variant, build_master
 
-
 # ---------- test infrastructure ----------
 
 class FakeRedis:
@@ -44,7 +43,7 @@ def _seed_job(tmp_path, presets=("720p",), seg_count=2):
         lines = ["#EXTM3U", "#EXT-X-VERSION:6", "#EXT-X-TARGETDURATION:4",
                  "#EXT-X-PLAYLIST-TYPE:VOD"]
         for i in range(seg_count):
-            lines += [f"#EXTINF:4.000000,", f"seg_{i:05d}.ts"]
+            lines += ["#EXTINF:4.000000,", f"seg_{i:05d}.ts"]
         lines.append("#EXT-X-ENDLIST")
         (tmp_path / p / "index.m3u8").write_text("\n".join(lines))
         for i in range(seg_count):
@@ -97,20 +96,19 @@ def test_db_outage_resolving_status_is_503(monkeypatch, tmp_path):
     assert c.get("/jobs/j1/playlist").status_code == 503
 
 
-# ---------- poster/sprite serve before done (written by the thumbs task mid-chord) ----------
+# ---------- poster/sprite follow the same done-only lifecycle as every artifact ----------
 
 @pytest.mark.parametrize("path", ["poster", "sprite"])
-def test_thumb_served_during_transcode(monkeypatch, tmp_path, path):
+def test_thumb_rejected_during_transcode_even_if_file_exists(monkeypatch, tmp_path, path):
     _seed_job(tmp_path)
     c = _client(monkeypatch, status="transcoding", tmp_path=tmp_path)
     r = c.get(f"/jobs/j1/{path}")
-    assert r.status_code == 200
-    assert r.headers["content-type"].startswith("image/jpeg")
+    assert r.status_code == 404
+    assert r.json()["error"]["code"] == "NOT_READY"
 
 
 @pytest.mark.parametrize("path", ["poster", "sprite"])
 def test_thumb_404_before_generated(monkeypatch, tmp_path, path):
-    # transcoding, but the thumbs task hasn't written the file yet
     c = _client(monkeypatch, status="transcoding", tmp_path=tmp_path)
     assert c.get(f"/jobs/j1/{path}").status_code == 404
 
@@ -176,6 +174,35 @@ def test_player_mime(monkeypatch, tmp_path):
     r = c.get("/jobs/j1/player")
     assert r.status_code == 200
     assert r.headers["content-type"].startswith("text/html")
+
+
+@pytest.mark.parametrize("url,relative_path", [
+    ("/jobs/j1/playlist", "master.m3u8"),
+    ("/jobs/j1/playlist/720p", "720p/index.m3u8"),
+    ("/jobs/j1/segments/720p/seg_00000.ts", "720p/seg_00000.ts"),
+    ("/jobs/j1/file", "web.mp4"),
+    ("/jobs/j1/manifest", "manifest.json"),
+    ("/jobs/j1/poster", "poster.jpg"),
+    ("/jobs/j1/sprite", "sprite.jpg"),
+    ("/jobs/j1/player", "embed.html"),
+])
+def test_missing_required_artifact_is_typed_404(
+    monkeypatch, tmp_path, url, relative_path,
+):
+    _seed_job(tmp_path)
+    artifact = tmp_path / relative_path
+    artifact.unlink(missing_ok=True)
+    c = _client(monkeypatch, tmp_path=tmp_path)
+
+    r = c.get(url)
+
+    assert r.status_code == 404
+    assert r.json()["error"] == {
+        "code": "ARTIFACT_MISSING",
+        "message": "artifact is unavailable",
+        "job_id": "j1",
+        "retryable": False,
+    }
 
 
 # ---------- URL-scheme contract ----------
