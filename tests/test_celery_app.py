@@ -1,6 +1,6 @@
 from app.workers.celery_app import app
 
-EXPECTED_QUEUES = {"inspect", "transcode", "package", "transcribe", "cleanup", "dead-letter"}
+EXPECTED_QUEUES = {"inspect", "transcode", "package", "transcribe", "cleanup"}
 
 
 def test_serializer_is_json_only():

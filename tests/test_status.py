@@ -1,4 +1,5 @@
 import asyncio
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -127,3 +128,175 @@ def test_status_active_counts_clamp_negative_drift(monkeypatch):
     monkeypatch.setattr(st, "_cache", {"at": 0.0, "data": None})
     body = TestClient(app, raise_server_exceptions=False).get("/status").json()
     assert body["jobs"]["queued"] == 0                    # negative drift clamped to 0
+
+
+def test_disk_probe_failure_is_not_reported_as_safe(monkeypatch):
+    from app.storage import pressure
+
+    def fail():
+        raise OSError("disk unavailable")
+
+    monkeypatch.setattr(pressure, "our_usage_bytes", fail)
+
+    with pytest.raises(OSError, match="disk unavailable"):
+        st._disk_snapshot()
+
+
+def test_missing_rabbitmq_queue_is_unreachable(monkeypatch):
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return [{"name": name, "messages": 0} for name in st.QUEUE_NAMES if name != "cleanup"]
+
+    class Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            return None
+
+        async def get(self, *_args, **_kwargs):
+            return Response()
+
+    monkeypatch.setattr(st.httpx, "AsyncClient", lambda **_kwargs: Client())
+
+    with pytest.raises(RuntimeError, match="cleanup"):
+        asyncio.run(st._queues_section())
+
+
+def test_missing_kafka_topic_is_unreachable(monkeypatch):
+    class KafkaConsumer:
+        def __init__(self, _config):
+            pass
+
+        def list_topics(self, *_args, **_kwargs):
+            return SimpleNamespace(topics={})
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(st, "Consumer", KafkaConsumer)
+
+    with pytest.raises(RuntimeError, match="topic missing"):
+        st._group_lag("dispatcher")
+
+
+def test_kafka_lag_starts_at_low_watermark_without_commit(monkeypatch):
+    class KafkaConsumer:
+        def __init__(self, _config):
+            pass
+
+        def list_topics(self, *_args, **_kwargs):
+            topic = SimpleNamespace(error=None, partitions={0: object()})
+            return SimpleNamespace(topics={st.TOPIC: topic})
+
+        def committed(self, _partitions, **_kwargs):
+            return [SimpleNamespace(offset=-1001, error=None)]
+
+        def get_watermark_offsets(self, _partition, **_kwargs):
+            return 100, 125
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(st, "Consumer", KafkaConsumer)
+
+    assert st._group_lag("dispatcher") == 25
+
+
+def test_build_runs_sections_concurrently(monkeypatch):
+    async def exercise():
+        started = set()
+        all_started = asyncio.Event()
+
+        async def section(name):
+            started.add(name)
+            if len(started) == 2:
+                all_started.set()
+            await asyncio.wait_for(all_started.wait(), timeout=0.1)
+            return {"name": name}
+
+        monkeypatch.setattr(st, "_SECTIONS", {
+            "first": lambda: section("first"),
+            "second": lambda: section("second"),
+        })
+        return await st._build()
+
+    body = asyncio.run(exercise())
+
+    assert body["first"] == {"name": "first"}
+    assert body["second"] == {"name": "second"}
+
+
+def test_build_times_out_one_section(monkeypatch):
+    async def slow():
+        await asyncio.sleep(1)
+
+    monkeypatch.setattr(st, "_SECTIONS", {"slow": slow})
+    monkeypatch.setattr(st, "_SECTION_TIMEOUT", 0.01)
+
+    body = asyncio.run(st._build())
+
+    assert body["slow"] == "unreachable"
+
+
+def test_cache_age_starts_after_build(monkeypatch):
+    clock = {"now": 0.0}
+    calls = 0
+
+    async def build():
+        nonlocal calls
+        calls += 1
+        clock["now"] = 10.0
+        return {"build": calls}
+
+    async def exercise():
+        monkeypatch.setattr(st, "_cache_lock", asyncio.Lock())
+        first = await st.status()
+        clock["now"] = 12.0
+        second = await st.status()
+        return first, second
+
+    monkeypatch.setattr(st, "_cache", {"at": 0.0, "data": None})
+    monkeypatch.setattr(st, "_build", build)
+    monkeypatch.setattr(st.time, "monotonic", lambda: clock["now"])
+
+    first, second = asyncio.run(exercise())
+
+    assert first == second == {"build": 1}
+    assert calls == 1
+
+
+def test_cache_coalesces_concurrent_builds(monkeypatch):
+    calls = 0
+
+    async def exercise():
+        nonlocal calls
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def build():
+            nonlocal calls
+            calls += 1
+            started.set()
+            await release.wait()
+            return {"build": calls}
+
+        monkeypatch.setattr(st, "_cache", {"at": 0.0, "data": None})
+        monkeypatch.setattr(st, "_cache_lock", asyncio.Lock())
+        monkeypatch.setattr(st, "_build", build)
+        monkeypatch.setattr(st.time, "monotonic", lambda: 1.0)
+
+        first = asyncio.create_task(st.status())
+        await started.wait()
+        second = asyncio.create_task(st.status())
+        await asyncio.sleep(0)
+        release.set()
+        return await asyncio.gather(first, second)
+
+    first, second = asyncio.run(exercise())
+
+    assert first == second == {"build": 1}
+    assert calls == 1

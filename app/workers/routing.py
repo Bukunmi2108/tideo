@@ -1,6 +1,6 @@
 from kombu import Queue
 
-QUEUE_NAMES = ("inspect", "transcode", "package", "transcribe", "cleanup", "dead-letter")
+QUEUE_NAMES = ("inspect", "transcode", "package", "transcribe", "cleanup")
 task_queues = tuple(Queue(name) for name in QUEUE_NAMES)
 
 

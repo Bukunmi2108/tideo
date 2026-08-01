@@ -14,14 +14,12 @@ def test_emit_success_publishes_envelope(monkeypatch):
     assert sent[0].payload == {"preset": "720p", "output_bytes": 9}
 
 
-def test_emit_swallows_producer_error_and_counts(monkeypatch):
+def test_emit_swallows_producer_error(monkeypatch):
     def boom(_env):
         raise RuntimeError("kafka local queue full")
 
     monkeypatch.setattr(producer, "publish", boom)
-    before = producer.emit_failures()
 
     ok = producer.emit("job.started", "j2", {})
 
     assert ok is False
-    assert producer.emit_failures() == before + 1

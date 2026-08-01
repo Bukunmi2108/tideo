@@ -1,9 +1,9 @@
+import asyncio
 import time
 
 import httpx
 from confluent_kafka import Consumer, TopicPartition
 from fastapi import APIRouter
-from fastapi.concurrency import run_in_threadpool
 
 from app.api.utils import now_iso
 from app.core.config import config
@@ -20,31 +20,33 @@ log = get_logger()
 
 _KAFKA_GROUPS = ("dispatcher", "audit")
 _CACHE_TTL = 5.0
+_SECTION_TIMEOUT = 10.0
 _cache: dict = {"at": 0.0, "data": None}
+_cache_lock = asyncio.Lock()
 
 
 async def _jobs_section() -> dict:
     r = get_client()
     active_raw = await r.hgetall(ACTIVE_COUNTS)
-    active = {s: max(0, int(active_raw.get(s, 0))) for s in sorted(ACTIVE)}   # clamp drift to >= 0
-    terminal = await run_in_threadpool(db.count_by_status)
+    active = {s: max(0, int(active_raw.get(s, 0))) for s in sorted(ACTIVE)}
+    terminal = await asyncio.to_thread(db.count_by_status)
     return {**active, **terminal}
 
 
 async def _disk_section() -> dict:
-    return await run_in_threadpool(_disk_snapshot)
+    return await asyncio.to_thread(_disk_snapshot)
 
 
 def _disk_snapshot() -> dict:
     from app.storage.pressure import free_bytes, is_shedding, our_usage_bytes
-    try:
-        used, free = our_usage_bytes(), free_bytes()
-        return {"used_bytes": used, "budget_bytes": config.storage_budget_bytes,
-                "free_bytes": free, "shedding": is_shedding(used, free)}
-    except OSError:
-        log.warning("disk_probe_failed")
-        return {"used_bytes": None, "budget_bytes": config.storage_budget_bytes,
-                "free_bytes": None, "shedding": False}
+
+    used, free = our_usage_bytes(), free_bytes()
+    return {
+        "used_bytes": used,
+        "budget_bytes": config.storage_budget_bytes,
+        "free_bytes": free,
+        "shedding": is_shedding(used, free),
+    }
 
 
 async def _dispatcher_section() -> dict:
@@ -66,7 +68,10 @@ async def _queues_section() -> dict:
         resp = await client.get(url, auth=auth)
         resp.raise_for_status()
         depths = {q["name"]: q.get("messages", 0) for q in resp.json()}
-    return {name: depths.get(name, 0) for name in QUEUE_NAMES}
+    missing = sorted(set(QUEUE_NAMES) - depths.keys())
+    if missing:
+        raise RuntimeError(f"RabbitMQ queues missing: {', '.join(missing)}")
+    return {name: depths[name] for name in QUEUE_NAMES}
 
 
 def _group_lag(group: str) -> int:
@@ -74,13 +79,20 @@ def _group_lag(group: str) -> int:
                   "enable.auto.commit": False})
     try:
         md = c.list_topics(TOPIC, timeout=5)
-        if TOPIC not in md.topics or md.topics[TOPIC].error is not None:
-            return 0
-        tps = [TopicPartition(TOPIC, p) for p in md.topics[TOPIC].partitions]
+        topic = md.topics.get(TOPIC)
+        if topic is None:
+            raise RuntimeError(f"Kafka topic missing: {TOPIC}")
+        if topic.error is not None:
+            raise RuntimeError(f"Kafka topic unavailable: {topic.error}")
+        if not topic.partitions:
+            raise RuntimeError(f"Kafka topic has no partitions: {TOPIC}")
+        tps = [TopicPartition(TOPIC, p) for p in topic.partitions]
         lag = 0
-        for tp in c.committed(tps, timeout=5):           # committed() queries the broker; no group join
-            _, hi = c.get_watermark_offsets(tp, timeout=5)
-            committed = tp.offset if tp.offset >= 0 else 0   # -1001 => no commit yet
+        for tp in c.committed(tps, timeout=5):
+            if tp.error is not None:
+                raise RuntimeError(f"Kafka committed offset unavailable: {tp.error}")
+            low, hi = c.get_watermark_offsets(tp, timeout=5)
+            committed = max(tp.offset, low) if tp.offset >= 0 else low
             lag += max(0, hi - committed)
         return lag
     finally:
@@ -88,7 +100,8 @@ def _group_lag(group: str) -> int:
 
 
 async def _kafka_section() -> dict:
-    return {g: await run_in_threadpool(_group_lag, g) for g in _KAFKA_GROUPS}
+    values = await asyncio.gather(*(asyncio.to_thread(_group_lag, group) for group in _KAFKA_GROUPS))
+    return dict(zip(_KAFKA_GROUPS, values, strict=True))
 
 
 _SECTIONS = {
@@ -101,23 +114,36 @@ _SECTIONS = {
 }
 
 
+async def _run_section(name: str, fn) -> tuple[str, dict | str]:
+    try:
+        value = await asyncio.wait_for(fn(), timeout=_SECTION_TIMEOUT)
+        return name, value
+    except Exception as exc:  # noqa: BLE001
+        error = "timeout" if isinstance(exc, TimeoutError) else str(exc)
+        log.warning("status_section_unreachable", section=name, error=error)
+        return name, "unreachable"
+
+
 async def _build() -> dict:
     out: dict = {"generated_at": now_iso()}
-    for name, fn in _SECTIONS.items():
-        try:
-            out[name] = await fn()
-        except Exception as e:
-            # the status page must work *especially* when something is broken — degrade, don't 500
-            log.warning("status_section_unreachable", section=name, error=str(e))
-            out[name] = "unreachable"
+    sections = await asyncio.gather(*(
+        _run_section(name, fn) for name, fn in _SECTIONS.items()
+    ))
+    out.update(sections)
     return out
+
+
+def _cached(now: float) -> bool:
+    return _cache["data"] is not None and now - _cache["at"] < _CACHE_TTL
 
 
 @router.get("/status")
 async def status():
-    now = time.monotonic()
-    if _cache["data"] is not None and now - _cache["at"] < _CACHE_TTL:
+    if _cached(time.monotonic()):
         return _cache["data"]
-    data = await _build()
-    _cache.update(at=now, data=data)
-    return data
+    async with _cache_lock:
+        if _cached(time.monotonic()):
+            return _cache["data"]
+        data = await _build()
+        _cache.update(at=time.monotonic(), data=data)
+        return data
