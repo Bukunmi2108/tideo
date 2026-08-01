@@ -33,3 +33,9 @@ def test_malformed_value_fails_naming_it():
 def test_invalid_profile_rejected():
     with pytest.raises(ValidationError):
         _cfg(profile="prod")
+
+
+@pytest.mark.parametrize("value", ["invalid", "3", "0/60", "3/0", "-1/60", "3/-1"])
+def test_invalid_stt_rate_limit_rejected(value):
+    with pytest.raises(ValidationError):
+        _cfg(stt_rate_limit=value)

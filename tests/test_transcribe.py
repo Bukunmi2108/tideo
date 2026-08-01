@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 from celery.exceptions import Retry
 
@@ -93,6 +95,11 @@ def test_no_audio_short_circuits_without_transcription(harness, monkeypatch):
     _, _, writes = harness
     monkeypatch.setattr(
         T,
+        "acquire",
+        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("rate limit must not be acquired")),
+    )
+    monkeypatch.setattr(
+        T,
         "transcribe_audio",
         lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("transcriber must not be called")),
     )
@@ -118,7 +125,19 @@ def test_cancelled_job_never_transcribes_or_writes_vtt(harness, monkeypatch):
 
 
 def test_rate_limit_reenqueues_with_countdown(harness, monkeypatch):
-    monkeypatch.setattr(T, "acquire", lambda *a, **k: RetryIn(7.5))
+    job_dir, _, _ = harness
+    calls = []
+
+    def extract(_src, out):
+        calls.append("extract")
+        Path(out).touch()
+
+    def deny(*_args, **_kwargs):
+        calls.append("acquire")
+        return RetryIn(7.5)
+
+    monkeypatch.setattr(T, "extract_audio", extract)
+    monkeypatch.setattr(T, "acquire", deny)
     monkeypatch.setattr(
         T,
         "transcribe_audio",
@@ -127,6 +146,8 @@ def test_rate_limit_reenqueues_with_countdown(harness, monkeypatch):
     with pytest.raises(_Retry) as ei:
         T.transcribe("j", "/src.mp4", AUDIO_META)
     assert ei.value.countdown == 7.5
+    assert calls == ["extract", "acquire"]
+    assert not (job_dir / "audio.wav").exists()
 
 
 def test_success_writes_vtt_and_marks_ready(harness, monkeypatch):

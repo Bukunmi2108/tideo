@@ -6,7 +6,7 @@ from redis.exceptions import RedisError
 
 from app.core.config import config
 from app.core.logging import bind_job, get_logger
-from app.core.ratelimit import RetryIn, acquire, parse_rate
+from app.core.ratelimit import RetryIn, acquire
 from app.domain.errors import STT_BAD_AUDIO, STT_INTERNAL
 from app.domain.vtt import render_vtt
 from app.storage import paths
@@ -69,14 +69,6 @@ def _finish_cancelled(job_id: str, job_dir=None) -> dict:
 def _run(task, job_id: str, src: str, meta: dict) -> dict:
     if is_cancelled(job_id):
         return _finish_cancelled(job_id)
-    limit, window = parse_rate(config.stt_rate_limit)
-    decision = acquire("stt:global", limit, window)
-    if isinstance(decision, RetryIn):
-        if is_cancelled(job_id):
-            return _finish_cancelled(job_id)
-        log.info("stt_rate_limited", retry_in=decision.seconds)
-        raise task.retry(countdown=decision.seconds, max_retries=PACING_CAP)
-
     if not has_audio(meta):
         log.info("stt_no_audio")
         _set_status(job_id, {"status": "none", "reason": "no audio stream"})
@@ -96,6 +88,13 @@ def _run(task, job_id: str, src: str, meta: dict) -> dict:
         return _finish_cancelled(job_id, job_dir)
 
     try:
+        limit, window = map(int, config.stt_rate_limit.split("/"))
+        decision = acquire("stt:global", limit, window)
+        if isinstance(decision, RetryIn):
+            if is_cancelled(job_id):
+                return _finish_cancelled(job_id, job_dir)
+            log.info("stt_rate_limited", retry_in=decision.seconds)
+            raise task.retry(countdown=decision.seconds, max_retries=PACING_CAP)
         segments = transcribe_audio(str(wav), cancelled=lambda: is_cancelled(job_id))
     except SttCancelled:
         return _finish_cancelled(job_id, job_dir)

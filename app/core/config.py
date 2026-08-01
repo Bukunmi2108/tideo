@@ -41,7 +41,7 @@ class Config(BaseSettings):
     dev_max_renditions: int = 4
     transcode_max_seconds: int = 1800
 
-    stt_rate_limit: str = "3/60"
+    stt_rate_limit: str = Field(default="3/60", pattern=r"^[1-9][0-9]*/[1-9][0-9]*$")
     stt_model: str = "base"
     stt_compute_type: str = "int8"
     stt_max_retries: int = 3
