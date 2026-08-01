@@ -42,12 +42,16 @@ def run():
         "auto.offset.reset": "earliest",
     })
     consumer.subscribe([TOPIC])
-    poison = 0
     try:
+        _heartbeat()
+        next_heartbeat = time.monotonic() + config.dispatcher_heartbeat_ttl / 3
         while _running:
-            clear_log_context()                  # each event starts with a clean binding
+            clear_log_context()
             msg = consumer.poll(1.0)
-            _heartbeat()
+            now = time.monotonic()
+            if now >= next_heartbeat:
+                _heartbeat()
+                next_heartbeat = now + config.dispatcher_heartbeat_ttl / 3
             if msg is None:
                 continue
             if msg.error():
@@ -57,12 +61,11 @@ def run():
             try:
                 env = parse_event(msg.value())
             except BadEvent as e:
-                poison += 1
                 log.error("poison_pill", partition=msg.partition(), offset=msg.offset(), error=str(e), raw=str(msg.value()))
                 consumer.commit(message=msg, asynchronous=False)
                 continue
 
-            bind_job(env["job_id"])              # every line below carries this job_id
+            bind_job(env["job_id"])
             try:
                 action = process(env, claim=claim, enqueue=_enqueue, release=release)
             except (RedisError, OperationalError) as e:
@@ -77,8 +80,8 @@ def run():
             consumer.commit(message=msg, asynchronous=False)
             log.info("event_processed", action=action, event_id=env.get("event_id"))
     finally:
-        consumer.close() 
-        log.info("dispatcher_stopped", poison=poison)
+        consumer.close()
+        log.info("dispatcher_stopped")
 
 if __name__ == "__main__":
     configure_logging("dispatcher")
