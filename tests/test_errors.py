@@ -58,6 +58,7 @@ def test_retryable_registry():
     assert is_retryable(SOURCE_CORRUPT) is False
     assert is_retryable(ENCODE_TIMEOUT) is True
     assert is_retryable(errors.STORAGE_FULL) is False
+    assert is_retryable(errors.INSPECTION_UNAVAILABLE) is True
     assert is_retryable("SOMETHING_NEW") is True  # unknown -> transient
 
 

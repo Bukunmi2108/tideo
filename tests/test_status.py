@@ -6,47 +6,7 @@ from fastapi.testclient import TestClient
 
 from app.api.main import app
 from app.api.routes import status as st
-from app.storage import state as stmod
 
-
-class FakeRedis:
-    def __init__(self):
-        self.hashes, self.counts = {}, {}
-
-    async def hget(self, k, f):
-        return self.hashes.get(k, {}).get(f)
-
-    async def hset(self, k, mapping=None):
-        self.hashes.setdefault(k, {}).update(mapping or {})
-
-    async def hincrby(self, k, f, n):
-        self.counts[f] = self.counts.get(f, 0) + n
-
-
-def test_awrite_status_increments_on_entering_active():
-    r = FakeRedis()
-    asyncio.run(stmod.awrite_status(r, "j1", "inspecting"))
-    assert r.counts == {"inspecting": 1}
-    assert r.hashes["job:j1"]["status"] == "inspecting"
-
-
-def test_awrite_status_moves_count_between_active_states():
-    r = FakeRedis()
-    asyncio.run(stmod.awrite_status(r, "j1", "queued"))
-    asyncio.run(stmod.awrite_status(r, "j1", "transcoding"))
-    assert r.counts == {"queued": 0, "transcoding": 1}
-
-
-def test_awrite_status_decrements_active_on_terminal_no_terminal_counter():
-    r = FakeRedis()
-    asyncio.run(stmod.awrite_status(r, "j1", "transcoding"))
-    asyncio.run(stmod.awrite_status(r, "j1", "done", extra={"results": "{}"}))
-    assert r.counts == {"transcoding": 0}
-    assert "done" not in r.counts
-    assert r.hashes["job:j1"]["results"] == "{}"
-
-
-# ---------- GET /status ----------
 
 class FakeAsyncRedis:
     def __init__(self, active, beat, dlq):

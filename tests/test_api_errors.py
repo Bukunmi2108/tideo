@@ -3,6 +3,7 @@ from fastapi.testclient import TestClient
 
 from app.api.errors import (
     ApiError,
+    InspectionUnavailable,
     InvalidUpload,
     StoragePressure,
     UnsupportedMedia,
@@ -28,6 +29,14 @@ def client():
             "STORAGE_PRESSURE",
             "storage is full, please try again later",
             "j1",
+            True,
+        ),
+        (
+            InspectionUnavailable("j2"),
+            503,
+            "INSPECTION_UNAVAILABLE",
+            "inspection is temporarily unavailable",
+            "j2",
             True,
         ),
     ],

@@ -128,8 +128,21 @@ async def atransition_status(
     *,
     caller: str,
     extra: dict | None = None,
+    expected: str | None = None,
 ) -> str | None:
     """Atomically transition a job with async Redis."""
+    if expected is not None:
+        nxt = transition(expected, target, job_id=job_id, caller=caller)
+        if nxt is None:
+            return None
+        result = await r.eval(
+            _TRANSITION,
+            2,
+            f"job:{job_id}",
+            "stats:active",
+            *_transition_args(expected, target, extra),
+        )
+        return target if int(result[0]) == 1 else None
     for _ in range(8):
         current = _text(await r.hget(f"job:{job_id}", "status") or "")
         nxt = transition(current, target, job_id=job_id, caller=caller)

@@ -4,6 +4,7 @@ import json
 from app.storage.job_control import (
     DispatchPlan,
     acancel_job,
+    atransition_status,
     reserve_dispatch,
     transition_status,
 )
@@ -38,6 +39,30 @@ def test_transition_status_drops_late_terminal_without_writing():
 
     assert transition_status(r, "j1", "done", caller="test") is None
     assert r.calls == []
+
+
+def test_expected_async_transition_does_not_follow_an_advanced_job():
+    class AsyncRedis:
+        def __init__(self):
+            self.calls = []
+
+        async def eval(self, script, key_count, *args):
+            self.calls.append((script, key_count, args))
+            return [0, "awaiting_choice"]
+
+    r = AsyncRedis()
+    result = asyncio.run(
+        atransition_status(
+            r,
+            "j1",
+            "failed",
+            caller="upload",
+            expected="inspecting",
+        )
+    )
+
+    assert result is None
+    assert len(r.calls) == 1
 
 
 def test_reserve_dispatch_returns_the_plan_redis_committed():

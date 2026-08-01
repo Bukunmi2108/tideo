@@ -3,6 +3,8 @@ from collections.abc import Mapping
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+from app.domain.errors import INSPECTION_UNAVAILABLE
+
 
 class ErrorDetail(BaseModel):
     code: str
@@ -50,6 +52,17 @@ class StoragePressure(ApiError):
             503,
             "STORAGE_PRESSURE",
             "storage is full, please try again later",
+            job_id=job_id,
+            retryable=True,
+        )
+
+
+class InspectionUnavailable(ApiError):
+    def __init__(self, job_id: str):
+        super().__init__(
+            503,
+            INSPECTION_UNAVAILABLE,
+            "inspection is temporarily unavailable",
             job_id=job_id,
             retryable=True,
         )

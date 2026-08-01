@@ -18,6 +18,10 @@ def test_default_prefetch_is_one():
     assert app.conf.worker_prefetch_multiplier == 1
 
 
+def test_rabbitmq_publications_require_confirmation():
+    assert app.conf.broker_transport_options["confirm_publish"] is True
+
+
 def test_all_queues_declared():
     names = {q.name for q in app.conf.task_queues}
     assert EXPECTED_QUEUES <= names

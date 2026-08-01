@@ -1,7 +1,9 @@
 import asyncio
-from unittest.mock import MagicMock
+from uuid import uuid4
 
 import pytest
+import redis
+import redis.asyncio as aioredis
 from fastapi.testclient import TestClient
 
 from app.api.main import app
@@ -11,128 +13,145 @@ from app.storage import dedupe
 
 
 class FakeRedis:
-    """Minimal async Redis with real SET NX semantics — enough for the dedupe paths."""
-
     def __init__(self):
         self.kv = {}
         self.hashes = {}
 
-    async def set(self, k, v, nx=False, ex=None):
-        if nx and k in self.kv:
-            return None
-        self.kv[k] = v
-        return True
+    async def eval(self, _script, key_count, *args):
+        if key_count == 3:
+            content_key, job_key, stats_key, job_id, _ttl, *extra = args
+            owner = self.kv.get(content_key)
+            status = self.hashes.get(f"job:{owner}", {}).get("status") if owner else None
+            if status in {"inspecting", "awaiting_choice", "queued", "transcoding", "done"}:
+                return ["hit", owner, status]
+            self.kv[content_key] = job_id
+            self.hashes[job_key] = {
+                "status": "inspecting",
+                **dict(zip(extra[::2], extra[1::2], strict=True)),
+            }
+            counts = self.hashes.setdefault(stats_key, {})
+            counts["inspecting"] = int(counts.get("inspecting", 0)) + 1
+            return ["miss", job_id, "inspecting"]
+        raise AssertionError(f"unexpected key count: {key_count}")
 
-    async def get(self, k):
-        return self.kv.get(k)
-
-    async def delete(self, *keys):
-        for k in keys:
-            self.kv.pop(k, None)
-            self.hashes.pop(k, None)
-
-    async def hset(self, k, mapping=None):
-        self.hashes.setdefault(k, {}).update(mapping or {})
-        return len(mapping or {})
-
-    async def hincrby(self, k, f, n):
-        return None
-
-    async def hgetall(self, k):
-        return dict(self.hashes.get(k, {}))
-
-    async def hget(self, k, field):
-        return self.hashes.get(k, {}).get(field)
+def _resolve(r, sha="sha", job_id="new"):
+    return dedupe.resolve_upload(
+        r,
+        sha,
+        job_id,
+        {
+            "source_filename": "clip.mp4",
+            "content_hash": sha,
+            "source_path": f"/uploads/{job_id}/source.mp4",
+            "created_at": "now",
+        },
+    )
 
 
-# ---------- dedupe.py units ----------
-
-def test_claim_is_atomic_first_wins():
+@pytest.mark.parametrize("status", ["inspecting", "awaiting_choice", "queued", "transcoding", "done"])
+def test_resolve_reuses_live_owner(status):
     r = FakeRedis()
+    r.kv["content:sha"] = "old"
+    r.hashes["job:old"] = {"status": status}
 
-    async def go():
-        a = await dedupe.claim(r, "sha", "jobA")
-        b = await dedupe.claim(r, "sha", "jobB")
-        return a, b, await dedupe.owner(r, "sha")
+    result = asyncio.run(_resolve(r))
 
-    a, b, owner = asyncio.run(go())
-    assert a is True and b is False and owner == "jobA"
+    assert result == dedupe.UploadResolution("hit", "old", status)
+    assert "job:new" not in r.hashes
+    assert r.hashes.get("stats:active", {}).get("inspecting", 0) == 0
 
 
-def test_is_valid_record_present_not_failed():
+@pytest.mark.parametrize("status", [None, "failed", "cancelled", "expired", "unknown"])
+def test_resolve_replaces_terminal_or_missing_owner(status):
     r = FakeRedis()
+    r.kv["content:sha"] = "old"
+    if status:
+        r.hashes["job:old"] = {"status": status}
 
-    async def go():
-        await r.hset("job:ok", mapping={"status": "inspecting"})
-        await r.hset("job:bad", mapping={"status": "failed"})
-        return (
-            await dedupe.is_valid(r, "ok"),
-            await dedupe.is_valid(r, "bad"),
-            await dedupe.is_valid(r, "missing"),
-        )
+    result = asyncio.run(_resolve(r))
 
-    ok, bad, missing = asyncio.run(go())
-    assert ok is True and bad is False and missing is False
+    assert result == dedupe.UploadResolution("miss", "new", "inspecting")
+    assert r.kv["content:sha"] == "new"
+    assert r.hashes["job:new"]["content_hash"] == "sha"
+    assert r.hashes["stats:active"]["inspecting"] == 1
 
 
-def test_reclaim_overwrites_owner():
-    r = FakeRedis()
+def test_parallel_resolution_has_one_winner():
+    client = redis.Redis(host="127.0.0.1", port=6379, db=15, decode_responses=True)
+    try:
+        client.ping()
+    except redis.RedisError:
+        pytest.skip("redis not reachable on 127.0.0.1:6379")
+    finally:
+        client.close()
 
-    async def go():
-        await dedupe.claim(r, "sha", "old")
-        await dedupe.reclaim(r, "sha", "new")
-        return await dedupe.owner(r, "sha")
+    async def run():
+        r = aioredis.Redis(host="127.0.0.1", port=6379, db=15, decode_responses=True)
+        sha = f"it_upload_{uuid4().hex}"
+        first, second = f"j_{uuid4().hex}", f"j_{uuid4().hex}"
+        content_key = f"content:{sha}"
+        before = int(await r.hget("stats:active", "inspecting") or 0)
+        try:
+            results = await asyncio.gather(
+                _resolve(r, sha, first),
+                _resolve(r, sha, second),
+            )
+            owner = await r.get(content_key)
+            after = int(await r.hget("stats:active", "inspecting") or 0)
+            return results, owner, after - before
+        finally:
+            await r.delete(content_key, f"job:{first}", f"job:{second}")
+            await r.hset("stats:active", "inspecting", before)
+            await r.aclose()
 
-    assert asyncio.run(go()) == "new"
+    results, owner, count_delta = asyncio.run(run())
 
+    assert sorted(result.outcome for result in results) == ["hit", "miss"]
+    assert all(result.job_id == owner for result in results)
+    assert count_delta == 1
 
-def test_parallel_claims_yield_one_winner():
-    r = FakeRedis()
-
-    async def go():
-        return await asyncio.gather(dedupe.claim(r, "s", "A"), dedupe.claim(r, "s", "B"))
-
-    assert sum(1 for x in asyncio.run(go()) if x) == 1
-
-
-# ---------- route integration ----------
 
 @pytest.fixture
 def client(monkeypatch, tmp_path):
     monkeypatch.setattr(config, "data_dir", tmp_path)
+    monkeypatch.setattr(up, "under_pressure", lambda: False)
     fake = FakeRedis()
     monkeypatch.setattr(up, "get_client", lambda: fake)
-    send = MagicMock()
-    monkeypatch.setattr(up.celery_app, "send_task", send)
-    return TestClient(app, raise_server_exceptions=False), fake, send
+    sent = []
+    monkeypatch.setattr(
+        up.celery_app,
+        "send_task",
+        lambda name, args=None: sent.append((name, args)),
+    )
+    return TestClient(app, raise_server_exceptions=False), fake, sent
 
 
-def test_duplicate_upload_hits_existing_job(client):
-    c, _, send = client
+def test_duplicate_upload_hits_owner_without_counter_drift(client):
+    http, fake, sent = client
     body = b"dupe-me"
-    r1 = c.post("/upload?filename=a.mp4", content=body).json()
-    r2 = c.post("/upload?filename=b.mp4", content=body).json()
-    assert r1["dedupe"] == "miss"
-    assert r2["dedupe"] == "hit"
-    assert r2["job_id"] == r1["job_id"]   # attached to the original
-    assert send.call_count == 1           # no second inspect task
+
+    first = http.post("/upload?filename=a.mp4", content=body).json()
+    second = http.post("/upload?filename=b.mp4", content=body).json()
+
+    assert first["dedupe"] == "miss"
+    assert second == {
+        "job_id": first["job_id"],
+        "status": "inspecting",
+        "dedupe": "hit",
+    }
+    assert len(sent) == 1
+    assert fake.hashes["stats:active"]["inspecting"] == 1
 
 
-def test_failed_owner_runs_fresh(client):
-    c, fake, send = client
-    body = b"failed-one"
-    r1 = c.post("/upload?filename=a.mp4", content=body).json()
-    fake.hashes[f"job:{r1['job_id']}"]["status"] = "failed"
-    r2 = c.post("/upload?filename=b.mp4", content=body).json()
-    assert r2["dedupe"] == "miss" and r2["job_id"] != r1["job_id"]
-    assert send.call_count == 2
+@pytest.mark.parametrize("status", ["failed", "cancelled", "expired"])
+def test_terminal_owner_runs_fresh(client, status):
+    http, fake, sent = client
+    body = f"owner-{status}".encode()
+    first = http.post("/upload?filename=a.mp4", content=body).json()
+    fake.hashes[f"job:{first['job_id']}"]["status"] = status
 
+    second = http.post("/upload?filename=b.mp4", content=body).json()
 
-def test_stale_owner_runs_fresh(client):
-    c, fake, send = client
-    body = b"stale-one"
-    r1 = c.post("/upload?filename=a.mp4", content=body).json()
-    fake.hashes.pop(f"job:{r1['job_id']}", None)   # owner record wiped
-    r2 = c.post("/upload?filename=b.mp4", content=body).json()
-    assert r2["dedupe"] == "miss"
-    assert send.call_count == 2
+    assert second["dedupe"] == "miss"
+    assert second["job_id"] != first["job_id"]
+    assert len(sent) == 2

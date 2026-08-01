@@ -21,6 +21,7 @@ app = Celery(
 )
 
 app.conf.update(
+    broker_transport_options={"confirm_publish": True},
     task_queues=routing.task_queues,
     task_routes=routing.task_routes,
     task_default_queue="inspect",

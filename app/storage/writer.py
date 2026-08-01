@@ -1,6 +1,8 @@
 import hashlib
+from functools import partial
 from pathlib import Path
 
+from anyio import open_file
 from anyio.to_thread import run_sync
 
 FLUSH_BYTES = 1 << 20
@@ -11,33 +13,27 @@ class UploadLimitExceeded(Exception):
 
 
 async def stream_to_disk(chunks, dest: Path, max_bytes: int) -> tuple[str, int]:
-    """One pass: hash + count + write off the event loop. Enforces max_bytes mid-stream and cleans the
-    partial on over-limit. Returns (sha256_hex, total_bytes)."""
-    dest.parent.mkdir(parents=True, exist_ok=True)
+    """Hash and store an upload in one pass."""
+    await run_sync(partial(dest.parent.mkdir, parents=True, exist_ok=True))
     sha = hashlib.sha256()
     total = 0
     buf = bytearray()
 
-    def flush(data: bytes, f) -> None:
-        sha.update(data)
-        f.write(data)
-
     try:
-        f = await run_sync(open, dest, "wb")
-        try:
+        async with await open_file(dest, "wb") as f:
             async for chunk in chunks:
                 total += len(chunk)
                 if total > max_bytes:
                     raise UploadLimitExceeded()
                 buf += chunk
                 if len(buf) >= FLUSH_BYTES:
-                    await run_sync(flush, bytes(buf), f)
+                    sha.update(buf)
+                    await f.write(buf)
                     buf.clear()
             if buf:
-                await run_sync(flush, bytes(buf), f)
-        finally:
-            await run_sync(f.close)
+                sha.update(buf)
+                await f.write(buf)
     except BaseException:
-        dest.unlink(missing_ok=True)
+        await run_sync(partial(dest.unlink, missing_ok=True))
         raise
     return sha.hexdigest(), total

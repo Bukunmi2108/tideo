@@ -1,25 +1,63 @@
+from dataclasses import dataclass
+from typing import Literal, cast
+
 from app.core.config import config
 
+_RESOLVE_UPLOAD = """
+local owner = redis.call('GET', KEYS[1])
+if owner then
+    local status = redis.call('HGET', 'job:' .. owner, 'status')
+    if status == 'inspecting' or status == 'awaiting_choice' or
+       status == 'queued' or status == 'transcoding' or status == 'done' then
+        return {'hit', owner, status}
+    end
+end
 
-def _key(sha: str) -> str:
-    return f"content:{sha}"
+redis.call('SET', KEYS[1], ARGV[1], 'EX', ARGV[2])
+for i = 3, #ARGV, 2 do
+    redis.call('HSET', KEYS[2], ARGV[i], ARGV[i + 1])
+end
+redis.call('HSET', KEYS[2], 'status', 'inspecting')
+redis.call('HINCRBY', KEYS[3], 'inspecting', 1)
+return {'miss', ARGV[1], 'inspecting'}
+"""
 
-def _ttl() -> int:
-    return config.output_ttl_days * 86400
+UploadOutcome = Literal["hit", "miss"]
 
-async def claim(r, sha: str, job_id: str) -> bool:
-    return bool(await r.set(_key(sha), job_id, nx=True, ex=_ttl()))
 
-async def owner(r, sha: str) -> str | None:
-    return await r.get(_key(sha))
+@dataclass(frozen=True)
+class UploadResolution:
+    outcome: UploadOutcome
+    job_id: str
+    status: str
 
-async def is_valid(r, job_id: str) -> bool:
-    record = await r.hgetall(f"job:{job_id}")
-    if not record:
-        return False
-    if record.get("status") == "failed":
-        return False
-    return True
 
-async def reclaim(r, sha: str, job_id: str) -> None:
-    await r.set(_key(sha), job_id, ex=_ttl())
+def _text(value) -> str:
+    return value.decode() if isinstance(value, bytes) else str(value)
+
+
+async def resolve_upload(
+    r,
+    content_hash: str,
+    job_id: str,
+    extra: dict,
+) -> UploadResolution:
+    args = [value for item in extra.items() for value in (item[0], str(item[1]))]
+    raw = await r.eval(
+        _RESOLVE_UPLOAD,
+        3,
+        f"content:{content_hash}",
+        f"job:{job_id}",
+        "stats:active",
+        job_id,
+        config.output_ttl_days * 86400,
+        *args,
+    )
+    outcome = _text(raw[0])
+    if outcome not in ("hit", "miss"):
+        raise RuntimeError(f"unexpected upload resolution: {outcome}")
+    return UploadResolution(
+        cast(UploadOutcome, outcome),
+        _text(raw[1]),
+        _text(raw[2]),
+    )
