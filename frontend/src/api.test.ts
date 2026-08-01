@@ -120,6 +120,14 @@ describe("getJob", () => {
     const err = await getJob("j1").catch((e: unknown) => e);
     expect((err as ApiError).retryable).toBe(true);
   });
+
+  it("falls back to a framework detail message", async () => {
+    mockFetch({ detail: "Not Found" }, 404);
+
+    const err = await getJob("j1").catch((e: unknown) => e);
+
+    expect(err).toMatchObject({ code: "UNKNOWN", message: "Not Found" });
+  });
 });
 
 describe("postTranscode", () => {

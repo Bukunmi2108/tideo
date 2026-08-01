@@ -7,7 +7,7 @@ from redis.exceptions import RedisError
 from app.core.config import config
 from app.core.logging import bind_job, get_logger
 from app.core.ratelimit import RetryIn, acquire, parse_rate
-from app.domain.errors import STT_BAD_AUDIO, STT_INTERNAL, STT_RATE_LIMITED
+from app.domain.errors import STT_BAD_AUDIO, STT_INTERNAL
 from app.domain.vtt import render_vtt
 from app.storage import paths
 from app.storage.db import update_subtitles
@@ -18,8 +18,8 @@ from app.workers.cancellation import is_cancelled
 from app.workers.celery_app import app
 from app.workers.retry import backoff_seconds
 from app.workers.source import release_source
-from app.workers.stt import get_provider
-from app.workers.stt.base import SttCancelled, SttUpstreamError
+from app.workers.stt.local import SttCancelled, SttError
+from app.workers.stt.local import transcribe as transcribe_audio
 from app.workers.subtitles import attach_subtitles
 
 log = get_logger()
@@ -41,15 +41,11 @@ def _set_status(job_id: str, payload: dict) -> None:
         log.warning("source_release_failed")     # cleanup, not correctness — never let it mask the status write
 
 
-def _handle_failure(task, job_id: str, exc: SttUpstreamError) -> dict:
+def _handle_failure(task, job_id: str, exc: SttError) -> dict:
     """Retry or fail soft after an STT error."""
     err = exc.error
     if is_cancelled(job_id):
         return _finish_cancelled(job_id)
-    if err.code == STT_RATE_LIMITED:
-        delay = exc.retry_after if exc.retry_after is not None else backoff_seconds(task.request.retries)
-        log.warning("stt_upstream_throttled", retry_in=delay)
-        raise task.retry(countdown=delay, max_retries=PACING_CAP)
     if err.retryable:
         attempts = get_sync_client().hincrby(f"job:{job_id}", "stt_attempts", 1)
         if attempts <= config.stt_max_retries:
@@ -100,10 +96,10 @@ def _run(task, job_id: str, src: str, meta: dict) -> dict:
         return _finish_cancelled(job_id, job_dir)
 
     try:
-        segments = get_provider().transcribe(str(wav), cancelled=lambda: is_cancelled(job_id))
+        segments = transcribe_audio(str(wav), cancelled=lambda: is_cancelled(job_id))
     except SttCancelled:
         return _finish_cancelled(job_id, job_dir)
-    except SttUpstreamError as e:
+    except SttError as e:
         return _handle_failure(task, job_id, e)
     finally:
         wav.unlink(missing_ok=True)

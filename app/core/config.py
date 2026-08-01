@@ -1,5 +1,6 @@
 from pathlib import Path
 from typing import Literal
+
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -40,13 +41,10 @@ class Config(BaseSettings):
     dev_max_renditions: int = 4
     transcode_max_seconds: int = 1800
 
-    stt_provider: Literal["local", "openai"] = "local"
     stt_rate_limit: str = "3/60"
     stt_model: str = "base"
     stt_compute_type: str = "int8"
     stt_max_retries: int = 3
-    openai_api_key: str = ""
-    stt_api_base: str = "https://api.openai.com/v1"
 
     profile: Literal["dev", "deploy"] = "dev"
     log_level: str = "INFO"

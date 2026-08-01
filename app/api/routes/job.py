@@ -6,7 +6,7 @@ from fastapi import APIRouter, Query
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
-from app.api.errors import ApiError, StoragePressure
+from app.api.errors import ApiError, ErrorResponse, StoragePressure
 from app.api.model import (
     JobListResponse,
     JobResponse,
@@ -28,7 +28,10 @@ from app.storage.pressure import under_pressure
 from app.storage.state import get_client
 from app.workers.celery_app import app as celery_app
 
-router = APIRouter(tags=["Job"])
+router = APIRouter(
+    tags=["Job"],
+    responses={code: {"model": ErrorResponse} for code in (404, 409, 410, 422, 503)},
+)
 log = get_logger()
 
 
@@ -154,7 +157,7 @@ async def transcode(job_id: str, body: TranscodeRequest):
         raise ApiError(422, "PRESET_NOT_RECOMMENDED",
                        f"presets not in recommendation: {bad or body.presets}", job_id=job_id)
     if under_pressure():                                   # gate new encode work; in-flight jobs are untouched
-        raise StoragePressure()
+        raise StoragePressure(job_id)
 
     try:
         nxt = await atransition_status(r, job_id, "queued", caller="transcode", extra={

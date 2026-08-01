@@ -3,8 +3,7 @@ import hashlib
 
 import pytest
 
-from app.api.errors import UploadTooLarge
-from app.storage.writer import FLUSH_BYTES, stream_to_disk
+from app.storage.writer import FLUSH_BYTES, UploadLimitExceeded, stream_to_disk
 
 
 async def gen(chunks):
@@ -35,7 +34,7 @@ def test_hash_and_bytes_match_reference(sizes, tmp_path):
 def test_over_limit_raises_and_cleans_partial(tmp_path):
     dest = tmp_path / "j" / "source.mp4"
     chunks = [b"a" * 600, b"b" * 600]       # 1200 total, limit 1000
-    with pytest.raises(UploadTooLarge):
+    with pytest.raises(UploadLimitExceeded):
         run(stream_to_disk(gen(chunks), dest, max_bytes=1000))
     assert not dest.exists()                # partial removed
 

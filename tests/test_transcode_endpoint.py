@@ -51,6 +51,7 @@ def test_transcode_sheds_under_storage_pressure(client, monkeypatch):
     assert r.status_code == 503
     err = r.json()["error"]
     assert err["code"] == "STORAGE_PRESSURE" and err["retryable"] is True
+    assert err["job_id"] == "jp"
     assert spy == [] and fake.hashes["job:jp"]["status"] == "awaiting_choice"   # no enqueue, state untouched
 
 

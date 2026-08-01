@@ -3,9 +3,11 @@ from pathlib import Path
 
 from anyio.to_thread import run_sync
 
-from app.api.errors import UploadTooLarge
-
 FLUSH_BYTES = 1 << 20
+
+
+class UploadLimitExceeded(Exception):
+    pass
 
 
 async def stream_to_disk(chunks, dest: Path, max_bytes: int) -> tuple[str, int]:
@@ -21,17 +23,20 @@ async def stream_to_disk(chunks, dest: Path, max_bytes: int) -> tuple[str, int]:
         f.write(data)
 
     try:
-        with open(dest, "wb") as f:
+        f = await run_sync(open, dest, "wb")
+        try:
             async for chunk in chunks:
                 total += len(chunk)
                 if total > max_bytes:
-                    raise UploadTooLarge()
+                    raise UploadLimitExceeded()
                 buf += chunk
                 if len(buf) >= FLUSH_BYTES:
                     await run_sync(flush, bytes(buf), f)
                     buf.clear()
             if buf:
                 await run_sync(flush, bytes(buf), f)
+        finally:
+            await run_sync(f.close)
     except BaseException:
         dest.unlink(missing_ok=True)
         raise

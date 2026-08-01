@@ -1,7 +1,6 @@
 import pytest
 
 from app.workers.stt import local
-from app.workers.stt.base import SttCancelled
 
 
 class Segment:
@@ -11,7 +10,7 @@ class Segment:
         self.text = text
 
 
-def test_local_provider_stops_during_lazy_segment_iteration(monkeypatch):
+def test_transcribe_stops_during_lazy_segment_iteration(monkeypatch):
     class Model:
         def transcribe(self, _path):
             return iter([Segment(0, 1, "one"), Segment(1, 2, "two")]), None
@@ -19,5 +18,18 @@ def test_local_provider_stops_during_lazy_segment_iteration(monkeypatch):
     checks = iter([False, True])
     monkeypatch.setattr(local, "_load_model", lambda: Model())
 
-    with pytest.raises(SttCancelled):
-        local.LocalProvider().transcribe("audio.wav", cancelled=lambda: next(checks))
+    with pytest.raises(local.SttCancelled):
+        local.transcribe("audio.wav", cancelled=lambda: next(checks))
+
+
+def test_transcribe_classifies_local_failure(monkeypatch):
+    monkeypatch.setattr(
+        local,
+        "_load_model",
+        lambda: (_ for _ in ()).throw(RuntimeError("model unavailable")),
+    )
+
+    with pytest.raises(local.SttError) as error:
+        local.transcribe("audio.wav")
+
+    assert error.value.error.code == "STT_UNAVAILABLE"

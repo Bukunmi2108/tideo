@@ -121,10 +121,11 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const body = await resp.json();
   if (!resp.ok) {
     const e = body?.error ?? {};
+    const detail = typeof body?.detail === "string" ? body.detail : undefined;
     throw new ApiError(
       resp.status,
       e.code ?? "UNKNOWN",
-      e.message ?? "request failed",
+      e.message ?? detail ?? "request failed",
       e.job_id ?? null,
       e.retryable ?? false,
     );

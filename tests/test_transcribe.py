@@ -4,13 +4,12 @@ from celery.exceptions import Retry
 from app.core.ratelimit import Allowed, RetryIn
 from app.domain.errors import (
     STT_BAD_AUDIO,
-    STT_RATE_LIMITED,
     STT_UNAVAILABLE,
     TRANSCRIBE,
     make_error,
 )
 from app.domain.vtt import Segment
-from app.workers.stt.base import SttUpstreamError
+from app.workers.stt.local import SttError
 from app.workers.tasks import transcribe as T
 
 AUDIO_META = {"duration": 30.0, "audio_codec": "aac"}
@@ -60,7 +59,7 @@ class FakeRedis:
         pass
 
 
-class FakeProvider:
+class FakeTranscriber:
     def __init__(self, segments=None, exc=None):
         self._segments, self._exc = segments, exc
 
@@ -86,22 +85,30 @@ def harness(tmp_path, monkeypatch):
     return tmp_path, redis, status_writes
 
 
-def _set_provider(monkeypatch, provider):
-    monkeypatch.setattr(T, "get_provider", lambda: provider)
+def _set_transcriber(monkeypatch, transcriber):
+    monkeypatch.setattr(T, "transcribe_audio", transcriber.transcribe)
 
 
-def test_no_audio_short_circuits_without_an_upstream_call(harness, monkeypatch):
+def test_no_audio_short_circuits_without_transcription(harness, monkeypatch):
     _, _, writes = harness
-    monkeypatch.setattr(T, "get_provider", lambda: (_ for _ in ()).throw(AssertionError("provider must not be called")))
+    monkeypatch.setattr(
+        T,
+        "transcribe_audio",
+        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("transcriber must not be called")),
+    )
     out = T.transcribe("j", "/src.mp4", NO_AUDIO_META)
     assert out == {"status": "none"}
     assert writes[-1]["status"] == "none"
 
 
-def test_cancelled_job_never_calls_provider_or_writes_vtt(harness, monkeypatch):
+def test_cancelled_job_never_transcribes_or_writes_vtt(harness, monkeypatch):
     job_dir, _, writes = harness
     monkeypatch.setattr(T, "is_cancelled", lambda _jid: True, raising=False)
-    monkeypatch.setattr(T, "get_provider", lambda: (_ for _ in ()).throw(AssertionError("provider called")))
+    monkeypatch.setattr(
+        T,
+        "transcribe_audio",
+        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("transcriber called")),
+    )
 
     out = T.transcribe("j", "/src.mp4", AUDIO_META)
 
@@ -112,7 +119,11 @@ def test_cancelled_job_never_calls_provider_or_writes_vtt(harness, monkeypatch):
 
 def test_rate_limit_reenqueues_with_countdown(harness, monkeypatch):
     monkeypatch.setattr(T, "acquire", lambda *a, **k: RetryIn(7.5))
-    monkeypatch.setattr(T, "get_provider", lambda: (_ for _ in ()).throw(AssertionError("gated before provider")))
+    monkeypatch.setattr(
+        T,
+        "transcribe_audio",
+        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("gated before transcription")),
+    )
     with pytest.raises(_Retry) as ei:
         T.transcribe("j", "/src.mp4", AUDIO_META)
     assert ei.value.countdown == 7.5
@@ -120,7 +131,7 @@ def test_rate_limit_reenqueues_with_countdown(harness, monkeypatch):
 
 def test_success_writes_vtt_and_marks_ready(harness, monkeypatch):
     job_dir, _, writes = harness
-    _set_provider(monkeypatch, FakeProvider(segments=[Segment(0, 1.5, "hello world")]))
+    _set_transcriber(monkeypatch, FakeTranscriber(segments=[Segment(0, 1.5, "hello world")]))
     out = T.transcribe("j", "/src.mp4", AUDIO_META)
     assert out == {"status": "ready"}
     assert (job_dir / "subtitles.vtt").read_text().startswith("WEBVTT")
@@ -128,17 +139,9 @@ def test_success_writes_vtt_and_marks_ready(harness, monkeypatch):
     assert writes[-1] == {"status": "ready", "url": "/jobs/j/subtitles"}
 
 
-def test_upstream_429_honors_retry_after(harness, monkeypatch):
-    _set_provider(monkeypatch, FakeProvider(
-        exc=SttUpstreamError(make_error(STT_RATE_LIMITED, "throttled", TRANSCRIBE), retry_after=42.0)))
-    with pytest.raises(_Retry) as ei:
-        T.transcribe("j", "/src.mp4", AUDIO_META)
-    assert ei.value.countdown == 42.0
-
-
-def test_upstream_unavailable_retries_then_fails_soft(harness, monkeypatch):
-    _set_provider(monkeypatch, FakeProvider(
-        exc=SttUpstreamError(make_error(STT_UNAVAILABLE, "503", TRANSCRIBE))))
+def test_local_stt_unavailable_retries_then_fails_soft(harness, monkeypatch):
+    _set_transcriber(monkeypatch, FakeTranscriber(
+        exc=SttError(make_error(STT_UNAVAILABLE, "model unavailable", TRANSCRIBE))))
     with pytest.raises(_Retry):                               # first attempt within the budget -> retry
         T.transcribe("j", "/src.mp4", AUDIO_META)
 
@@ -147,22 +150,11 @@ def test_upstream_unavailable_retries_then_fails_soft(harness, monkeypatch):
     out = T.transcribe("j", "/src.mp4", AUDIO_META)
     assert out == {"status": "failed"}
     assert writes[-1]["status"] == "failed" and writes[-1]["code"] == STT_UNAVAILABLE
-
-
-def test_permanent_bad_audio_fails_soft_without_retry(harness, monkeypatch):
-    _, _, writes = harness
-    _set_provider(monkeypatch, FakeProvider(
-        exc=SttUpstreamError(make_error(STT_BAD_AUDIO, "garbled", TRANSCRIBE))))
-    out = T.transcribe("j", "/src.mp4", AUDIO_META)
-    assert out == {"status": "failed"}
-    assert writes[-1]["code"] == STT_BAD_AUDIO
-
-
 def test_unexpected_exception_still_records_terminal_status(harness, monkeypatch):
     # an unanticipated failure AFTER the STT call (e.g. corrupt manifest in attach_subtitles) must not
     # leave subtitles stuck at "processing" — the backstop records a soft failure. "Silence is not an outcome."
     _, _, writes = harness
-    _set_provider(monkeypatch, FakeProvider(segments=[Segment(0, 1, "hi")]))
+    _set_transcriber(monkeypatch, FakeTranscriber(segments=[Segment(0, 1, "hi")]))
     monkeypatch.setattr(T, "attach_subtitles",
                         lambda jid, dur: (_ for _ in ()).throw(RuntimeError("corrupt manifest")))
     out = T.transcribe("j", "/src.mp4", AUDIO_META)
@@ -173,7 +165,11 @@ def test_unexpected_exception_still_records_terminal_status(harness, monkeypatch
 def test_audio_extraction_failure_fails_soft(harness, monkeypatch):
     _, _, writes = harness
     monkeypatch.setattr(T, "extract_audio", lambda src, out: (_ for _ in ()).throw(RuntimeError("ffmpeg")))
-    monkeypatch.setattr(T, "get_provider", lambda: (_ for _ in ()).throw(AssertionError("never reached")))
+    monkeypatch.setattr(
+        T,
+        "transcribe_audio",
+        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("never reached")),
+    )
     out = T.transcribe("j", "/src.mp4", AUDIO_META)
     assert out == {"status": "failed"}
     assert writes[-1]["code"] == STT_BAD_AUDIO

@@ -1,6 +1,7 @@
 import pytest
 from fastapi.testclient import TestClient
 
+from app.api.errors import ApiError
 from app.api.main import app
 from app.api.routes import artifacts as art_route
 from app.domain.playlist import Variant, build_master
@@ -52,15 +53,24 @@ def _seed_job(tmp_path, presets=("720p",), seg_count=2):
 
 # ---------- state guard ----------
 
-@pytest.mark.parametrize("status,expected", [
-    ("queued",      404),
-    ("transcoding", 404),
-    (None,          404),
-    ("expired",     410),
+@pytest.mark.parametrize("status,expected,code", [
+    ("queued",      404, "NOT_READY"),
+    ("transcoding", 404, "NOT_READY"),
+    (None,          404, "JOB_NOT_FOUND"),
+    ("expired",     410, "JOB_EXPIRED"),
 ])
-def test_guard_rejects_non_done(monkeypatch, status, expected):
+def test_guard_rejects_non_done(monkeypatch, status, expected, code):
     c = _client(monkeypatch, status=status)
-    assert c.get("/jobs/j1/playlist").status_code == expected
+    response = c.get("/jobs/j1/playlist")
+    assert response.status_code == expected
+    assert response.json()["error"]["code"] == code
+
+
+def test_safe_path_error_keeps_job_id(tmp_path):
+    with pytest.raises(ApiError) as error:
+        art_route._safe(tmp_path / "job", "j1", "..", "outside")
+
+    assert error.value.job_id == "j1"
 
 
 # ---------- cold-tier fallback: artifacts stay servable after the Redis hash is gone ----------

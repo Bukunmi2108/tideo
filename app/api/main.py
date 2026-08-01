@@ -1,20 +1,24 @@
 import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
-from fastapi import FastAPI, Response, status
+
+from fastapi import FastAPI, Request, Response, status
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
-from fastapi.responses import FileResponse, JSONResponse
-from app.api.errors import ApiError
-from app.api.routes import upload, job, artifacts
+from fastapi.responses import FileResponse
+from psycopg2 import InterfaceError, OperationalError
+from starlette.exceptions import HTTPException as StarletteHTTPException
+
+from app.api import ws as ws_module
+from app.api.errors import ApiError, error_response
+from app.api.routes import artifacts, job, upload
 from app.api.routes import status as status_routes
 from app.core.config import config
-from psycopg2 import InterfaceError, OperationalError
 from app.core.logging import configure_logging, get_logger
 from app.events.admin import ensure_topics
 from app.events.producer import flush_producer
 from app.storage.db import init_schema
-from app.api import ws as ws_module
 
 log = get_logger()
 
@@ -84,26 +88,54 @@ DEPENDENCIES = [
 ]
 
 @app.exception_handler(ApiError)
-async def _api_error(request, exc):
-    return JSONResponse(status_code=exc.status, content={"error": {
-        "code": exc.code, "message": exc.message, "job_id": exc.job_id, "retryable": exc.retryable}})
+async def _api_error(_request: Request, exc: ApiError):
+    return error_response(exc.status, exc.code, exc.message, exc.job_id, exc.retryable)
 
-async def _db_unavailable(request, exc):
+
+@app.exception_handler(RequestValidationError)
+async def _validation_error(request: Request, _exc: RequestValidationError):
+    return error_response(
+        422,
+        "VALIDATION_ERROR",
+        "request validation failed",
+        request.path_params.get("job_id"),
+    )
+
+
+@app.exception_handler(StarletteHTTPException)
+async def _http_error(request: Request, exc: StarletteHTTPException):
+    code = {
+        404: "ROUTE_NOT_FOUND",
+        405: "METHOD_NOT_ALLOWED",
+    }.get(exc.status_code, "HTTP_ERROR")
+    message = exc.detail if isinstance(exc.detail, str) else "request failed"
+    return error_response(
+        exc.status_code,
+        code,
+        message,
+        request.path_params.get("job_id"),
+        headers=exc.headers,
+    )
+
+
+async def _db_unavailable(_request: Request, exc: Exception):
     # transient DB outage on a read -> retryable 503; non-transient psycopg2 errors fall through to 500
     log.warning("db_unavailable_on_read", error=str(exc))
-    return JSONResponse(status_code=503, content={"error": {
-        "code": "DB_UNAVAILABLE", "message": "service temporarily unavailable, retry shortly",
-        "job_id": None, "retryable": True}})
+    return error_response(
+        503,
+        "DB_UNAVAILABLE",
+        "service temporarily unavailable, retry shortly",
+        retryable=True,
+    )
 
 app.add_exception_handler(OperationalError, _db_unavailable)
 app.add_exception_handler(InterfaceError, _db_unavailable)
 
 
 @app.exception_handler(Exception)
-async def _unhandled(request, exc):
+async def _unhandled(_request: Request, _exc: Exception):
     log.exception("unhandled_error")
-    return JSONResponse(status_code=500, content={"error": {
-        "code": "INTERNAL", "message": "internal error", "job_id": None, "retryable": False}})
+    return error_response(500, "INTERNAL", "internal error")
 
 @app.get("/healthz")
 def healthz():
@@ -121,7 +153,7 @@ async def _probe(host: str, port: int) -> bool:
             timeout=config.readiness_timeout_seconds,
         )
         return True
-    except (OSError, asyncio.TimeoutError):
+    except (TimeoutError, OSError):
         return False
     finally:
         if writer is not None:

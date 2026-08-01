@@ -7,14 +7,17 @@ from fastapi import APIRouter
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, HTMLResponse, Response
 
-from app.api.errors import ApiError
+from app.api.errors import ApiError, ErrorResponse
 from app.core.logging import get_logger
 from app.domain.ladder import PRESETS
 from app.storage import paths
 from app.storage.db import get_job as db_get_job
 from app.storage.state import get_client
 
-router = APIRouter(tags=["Artifacts"])
+router = APIRouter(
+    tags=["Artifacts"],
+    responses={code: {"model": ErrorResponse} for code in (403, 404, 410, 503)},
+)
 log = get_logger()
 _SEG = re.compile(r"^seg_\d{5}\.ts$")
 
@@ -42,19 +45,19 @@ async def _guard(job_id: str) -> Path:
     """Require a completed, unexpired job."""
     status = await _resolve_status(job_id)
     if status is None:
-        raise ApiError(404, "NOT_FOUND", "job not found", job_id)
+        raise ApiError(404, "JOB_NOT_FOUND", "job not found", job_id)
     if status == "expired":
-        raise ApiError(410, "EXPIRED", "job artifacts have expired", job_id)
+        raise ApiError(410, "JOB_EXPIRED", "job artifacts have expired", job_id)
     if status != "done":
         raise ApiError(404, "NOT_READY", "artifacts not yet available", job_id)
     return paths.output_dir(job_id)
 
 
-def _safe(job_dir: Path, *parts: str) -> Path:
+def _safe(job_dir: Path, job_id: str, *parts: str) -> Path:
     """Keep resolved paths inside the job directory."""
     p = Path(job_dir, *parts).resolve()
     if not p.is_relative_to(job_dir.resolve()):
-        raise ApiError(403, "FORBIDDEN", "invalid path", "")
+        raise ApiError(403, "FORBIDDEN", "invalid path", job_id)
     return p
 
 
@@ -119,7 +122,7 @@ async def rendition_playlist(job_id: str, preset: str):
     if preset not in PRESETS:
         raise ApiError(404, "NOT_FOUND", "unknown preset", job_id)
     job_dir = await _guard(job_id)
-    src = _safe(job_dir, preset, "index.m3u8")
+    src = _safe(job_dir, job_id, preset, "index.m3u8")
     src = _require_artifact(src, job_id, f"rendition_playlist:{preset}")
     content = src.read_text()
     content = re.sub(r"(seg_\d{5}\.ts)", rf"../segments/{preset}/\1", content)
@@ -133,7 +136,7 @@ async def segment(job_id: str, preset: str, filename: str):
     if not _SEG.match(filename):
         raise ApiError(404, "NOT_FOUND", "invalid segment name", job_id)
     job_dir = await _guard(job_id)
-    path = _safe(job_dir, preset, filename)
+    path = _safe(job_dir, job_id, preset, filename)
     path = _require_artifact(path, job_id, f"segment:{preset}:{filename}")
     return FileResponse(str(path), media_type=TS_MIME,
                         headers={"Cache-Control": IMMUTABLE})

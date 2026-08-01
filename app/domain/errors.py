@@ -14,7 +14,6 @@ ENCODE_FAILED_TRANSIENT = "ENCODE_FAILED_TRANSIENT"
 ENCODE_TIMEOUT = "ENCODE_TIMEOUT"
 STORAGE_FULL = "STORAGE_FULL"
 CANCELLED = "CANCELLED"
-STT_RATE_LIMITED = "STT_RATE_LIMITED"
 STT_UNAVAILABLE = "STT_UNAVAILABLE"
 STT_BAD_AUDIO = "STT_BAD_AUDIO"
 STT_INTERNAL = "STT_INTERNAL"
@@ -28,7 +27,6 @@ _RETRYABLE = {
     ENCODE_TIMEOUT: True,
     STORAGE_FULL: False,
     CANCELLED: False,
-    STT_RATE_LIMITED: True,
     STT_UNAVAILABLE: True,
     STT_BAD_AUDIO: False,
     STT_INTERNAL: False,
@@ -58,9 +56,9 @@ def _last_line(text: str) -> str:
 
 # first match wins — keep corrupt patterns ahead of the broader codec ones
 _PATTERNS: list[tuple[re.Pattern, str]] = [
-    (re.compile(r"moov atom not found|invalid data found|truncat", re.I), SOURCE_CORRUPT),
-    (re.compile(r"decoder.*not found|unknown decoder|unknown encoder|no such filter", re.I), SOURCE_UNSUPPORTED),
-    (re.compile(r"no space left on device|enospc", re.I), STORAGE_FULL),
+    (re.compile(r"moov atom not found|invalid data found|truncat", re.IGNORECASE), SOURCE_CORRUPT),
+    (re.compile(r"decoder.*not found|unknown decoder|unknown encoder|no such filter", re.IGNORECASE), SOURCE_UNSUPPORTED),
+    (re.compile(r"no space left on device|enospc", re.IGNORECASE), STORAGE_FULL),
 ]
 
 

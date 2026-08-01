@@ -4,23 +4,32 @@ from pathlib import Path
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
-from app.api.errors import InvalidUpload, StoragePressure, UnsupportedMedia, UploadTooLarge
+from app.api.errors import (
+    ErrorResponse,
+    InvalidUpload,
+    StoragePressure,
+    UnsupportedMedia,
+    UploadTooLarge,
+)
 from app.api.utils import new_job_id, now_iso
 from app.core.config import config
 from app.core.logging import bind_job, get_logger
-from app.storage.state import get_client, awrite_status
-from app.storage.writer import stream_to_disk
-from app.storage.pressure import under_pressure
-from app.workers.celery_app import app as celery_app
 from app.storage import dedupe
+from app.storage.pressure import under_pressure
+from app.storage.state import awrite_status, get_client
+from app.storage.writer import UploadLimitExceeded, stream_to_disk
+from app.workers.celery_app import app as celery_app
 
-router = APIRouter(tags=["Upload"])
+router = APIRouter(
+    tags=["Upload"],
+    responses={code: {"model": ErrorResponse} for code in (413, 415, 422, 503)},
+)
 log = get_logger()
 
 ALLOWED_EXTS = {".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v"}
 
 
-@router.post("/upload")
+@router.post("/upload", status_code=202)
 async def upload(request: Request, filename: str | None = None):
     if not filename:
         raise InvalidUpload("filename query parameter is required")
@@ -35,9 +44,9 @@ async def upload(request: Request, filename: str | None = None):
     dest = config.uploads_dir / job_id / f"source{ext}"
     try:
         content_hash, size = await stream_to_disk(request.stream(), dest, config.max_upload_bytes)
-    except UploadTooLarge:
+    except UploadLimitExceeded:
         shutil.rmtree(dest.parent, ignore_errors=True)  # no orphan {job_id}/ dir
-        raise
+        raise UploadTooLarge() from None
 
     if size == 0:
         shutil.rmtree(dest.parent, ignore_errors=True)
