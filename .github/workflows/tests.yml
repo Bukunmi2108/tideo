@@ -29,6 +29,15 @@ jobs:
           enable-cache: true
       - run: uv sync --frozen
       - run: uv run pytest -q
+      - run: bash -n deploy/deploy.sh
+      - run: >-
+          TIDEO_SOURCE_ROOT=.
+          TIDEO_ENV_FILE=deploy/.env.example
+          docker compose
+          --env-file deploy/.env.example
+          --project-directory .
+          -f deploy/compose.production.yaml
+          config --quiet
 
       - uses: actions/setup-node@v6
         with:

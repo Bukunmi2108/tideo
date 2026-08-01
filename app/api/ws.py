@@ -4,6 +4,7 @@ from typing import cast
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from app.api.model import error_view, json_list, progress_map, results_view
+from app.core.config import config
 from app.core.logging import bind_job, get_logger
 from app.domain.state import TERMINAL
 from app.storage.state import get_client
@@ -29,6 +30,11 @@ async def _send_terminal(ws: WebSocket, r, job_id: str, status: str) -> None:
 @router.websocket("/jobs/{job_id}/progress")
 async def progress_ws(ws: WebSocket, job_id: str) -> None:
     bind_job(job_id)
+    origin = ws.headers.get("origin")
+    if origin and origin not in config.allowed_origin_list:
+        log.warning("ws_origin_rejected", origin=origin)
+        await ws.close(code=1008)
+        return
     await ws.accept()
     r = get_client()
     ps = r.pubsub()

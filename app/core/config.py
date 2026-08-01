@@ -1,7 +1,8 @@
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlsplit
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -27,7 +28,10 @@ class Config(BaseSettings):
 
     readiness_timeout_seconds: float = 2.0
     dispatcher_heartbeat_ttl: int = 30
-    
+    allowed_origins: str = "http://localhost:5173"
+    sleep_lease_host: str = ""
+    sleep_lease_interval_seconds: int = Field(default=60, ge=10)
+
     data_dir: Path = Path("/data")
     max_upload_bytes: int = 4 * 1024**3
     max_source_seconds: int = 7200
@@ -54,6 +58,32 @@ class Config(BaseSettings):
         env_file_encoding="utf-8",
         extra="ignore",
     )
+
+    @field_validator("allowed_origins")
+    @classmethod
+    def _valid_origins(cls, value: str) -> str:
+        origins = [
+            origin.strip().rstrip("/") for origin in value.split(",") if origin.strip()
+        ]
+        for origin in origins:
+            parsed = urlsplit(origin)
+            if (
+                origin == "*"
+                or parsed.scheme not in {"http", "https"}
+                or not parsed.netloc
+            ):
+                raise ValueError(f"invalid browser origin: {origin}")
+            if parsed.path or parsed.query or parsed.fragment:
+                raise ValueError(
+                    f"origin must not contain a path, query, or fragment: {origin}"
+                )
+        if not origins:
+            raise ValueError("at least one browser origin is required")
+        return ",".join(origins)
+
+    @property
+    def allowed_origin_list(self) -> list[str]:
+        return self.allowed_origins.split(",")
 
     @property
     def uploads_dir(self) -> Path:

@@ -2,6 +2,7 @@ import asyncio
 import json
 from unittest.mock import AsyncMock
 
+import pytest
 from fastapi import WebSocketDisconnect
 from starlette.testclient import TestClient
 
@@ -79,6 +80,21 @@ def test_snapshot_content(monkeypatch):
     assert frame["type"] == "snapshot"
     assert frame["status"] == "transcoding"
     assert frame["progress"] == {"720p": 41.2, "480p": 23.7}
+
+
+def test_browser_origin_is_enforced(monkeypatch):
+    c, _ = _setup(monkeypatch, {"status": "transcoding"})
+
+    with (
+        pytest.raises(WebSocketDisconnect) as exc,
+        c.websocket_connect(
+            "/jobs/j1/progress",
+            headers={"origin": "https://example.invalid"},
+        ),
+    ):
+        pass
+
+    assert exc.value.code == 1008
 
 
 def test_snapshot_includes_presets(monkeypatch):
@@ -246,6 +262,10 @@ def test_heartbeat_disconnect_closes_pubsub(monkeypatch):
             return None
 
     class DisconnectOnPing:
+        @property
+        def headers(self):
+            return {}
+
         async def accept(self):
             pass
 
