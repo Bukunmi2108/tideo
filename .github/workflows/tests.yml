@@ -30,7 +30,10 @@ jobs:
       - run: uv sync --frozen
       - run: uv run pytest -q
       - run: bash -n deploy/deploy.sh
-      - run: grep -Fq 'test: ["CMD-SHELL", "nc -z -w2 127.0.0.1 5672"]' deploy/compose.production.yaml
+      - run: >-
+          grep -Fq
+          'test: ["CMD-SHELL", "nc -z -w2 127.0.0.1 5672"]'
+          deploy/compose.production.yaml
       - run: >-
           TIDEO_SOURCE_ROOT=.
           TIDEO_ENV_FILE=deploy/.env.example
