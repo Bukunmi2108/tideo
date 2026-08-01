@@ -10,12 +10,13 @@ import app.core.logging as L
 
 @pytest.fixture
 def cap():
-    """configure_logging into a captured stream, restoring the real logging/structlog state after."""
     root = logging.getLogger()
     saved_handlers, saved_level = root.handlers[:], root.level
     L.configure_logging("svc")
     buf = io.StringIO()
-    root.handlers[0].stream = buf
+    handler = root.handlers[0]
+    assert isinstance(handler, logging.StreamHandler)
+    handler.setStream(buf)
     yield buf
     L.clear_log_context()
     root.handlers, root.level = saved_handlers, saved_level
@@ -43,10 +44,21 @@ def test_structlog_event_keeps_its_name_and_fields(cap):
     assert line["service"] == "svc"
 
 
+def test_exception_includes_traceback(cap):
+    try:
+        raise RuntimeError("boom")
+    except RuntimeError:
+        L.get_logger().exception("failed")
+
+    (line,) = _lines(cap)
+    assert "Traceback (most recent call last)" in line["exception"]
+    assert "RuntimeError: boom" in line["exception"]
+
+
 def test_bind_job_attaches_to_every_subsequent_line(cap):
     L.bind_job("j_abc")
-    logging.getLogger("x").info("first")          # foreign record
-    L.get_logger().info("second")                 # structlog event
+    logging.getLogger("x").info("first")
+    L.get_logger().info("second")
     lines = _lines(cap)
     assert [ln["job_id"] for ln in lines] == ["j_abc", "j_abc"]
 
