@@ -4,24 +4,17 @@ set -Eeuo pipefail
 readonly REVISION="${1:?usage: deploy-tideo <git-revision>}"
 readonly APP_ROOT=/opt/workspace/apps/tideo
 readonly SOURCE_ROOT="$APP_ROOT/source"
-readonly DEPLOY_HOME=/home/tideo-deploy
-readonly GITHUB_DEPLOY_KEY="$DEPLOY_HOME/.ssh/tideo_github_ed25519"
-readonly GITHUB_KNOWN_HOSTS="$DEPLOY_HOME/.ssh/known_hosts"
-readonly REPOSITORY=git@github.com:Bukunmi2108/tideo.git
+readonly REPOSITORY=https://github.com/Bukunmi2108/tideo.git
 readonly COMPOSE_FILE="$SOURCE_ROOT/deploy/compose.production.yaml"
 
 if [[ ! "$REVISION" =~ ^[0-9a-f]{40}$ ]]; then
   echo "ERROR: deployment revision must be a full Git SHA" >&2
   exit 2
 fi
-for required in "$GITHUB_DEPLOY_KEY" "$GITHUB_KNOWN_HOSTS" "$APP_ROOT/.env"; do
-  if [[ ! -r "$required" ]]; then
-    echo "ERROR: missing readable deployment file: $required" >&2
-    exit 1
-  fi
-done
-
-export GIT_SSH_COMMAND="ssh -i $GITHUB_DEPLOY_KEY -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$GITHUB_KNOWN_HOSTS"
+if [[ ! -r "$APP_ROOT/.env" ]]; then
+  echo "ERROR: missing readable deployment file: $APP_ROOT/.env" >&2
+  exit 1
+fi
 
 mkdir -p "$APP_ROOT"
 if [[ ! -d "$SOURCE_ROOT/.git" ]]; then
