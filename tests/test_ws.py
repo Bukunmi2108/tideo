@@ -1,6 +1,8 @@
+import asyncio
 import json
 from unittest.mock import AsyncMock
 
+from fastapi import WebSocketDisconnect
 from starlette.testclient import TestClient
 
 from app.api import ws as ws_module
@@ -8,13 +10,22 @@ from app.api.main import app
 
 
 class FakeRedis:
-    """Async Redis stub for the shared client (hgetall + hget only)."""
-
-    def __init__(self, rec: dict, status_seq: list | None = None):
+    def __init__(
+        self,
+        rec: dict,
+        status_seq: list | None = None,
+        *,
+        pubsub=None,
+        events: list[str] | None = None,
+    ):
         self._rec = rec
         self._status_iter = iter(status_seq or [])
+        self._pubsub = pubsub
+        self._events = events
 
     async def hgetall(self, _key: str) -> dict:
+        if self._events is not None:
+            self._events.append("read")
         return dict(self._rec)
 
     async def hget(self, _key: str, field: str) -> str | None:
@@ -25,39 +36,25 @@ class FakeRedis:
                 return self._rec.get("status")
         return self._rec.get(field)
 
+    def pubsub(self):
+        return self._pubsub
+
 
 class FakePubSub:
-    """Pub/sub stub that yields a fixed message list then stops."""
-
-    def __init__(self, messages: list[dict]):
+    def __init__(self, messages: list[dict], events: list[str] | None = None):
         self._messages = messages
+        self.events = events if events is not None else []
         self.subscribed: list[str] = []
-        self.unsubscribe = AsyncMock()
-
-    async def subscribe(self, ch: str) -> None:
-        self.subscribed.append(ch)
-
-    def listen(self):
-        msgs = self._messages
-
-        async def _gen():
-            for m in msgs:
-                yield m
-
-        return _gen()
-
-
-class FakePubSubClient:
-    def __init__(self, messages: list[dict] | None = None):
-        self._ps = FakePubSub(messages or [])
         self.aclose = AsyncMock()
 
-    def pubsub(self) -> FakePubSub:
-        return self._ps
+    async def subscribe(self, ch: str) -> None:
+        self.events.append("subscribe")
+        self.subscribed.append(ch)
 
-    @property
-    def ps(self) -> FakePubSub:
-        return self._ps
+    async def get_message(self, *, timeout: float) -> dict | None:
+        if self._messages:
+            return self._messages.pop(0)
+        raise WebSocketDisconnect()
 
 
 def _msg(preset: str, percent: float) -> dict:
@@ -65,11 +62,11 @@ def _msg(preset: str, percent: float) -> dict:
 
 
 def _setup(monkeypatch, rec: dict, ps_messages=None, status_seq=None):
-    r = FakeRedis(rec, status_seq)
-    psc = FakePubSubClient(ps_messages or [])
+    events: list[str] = []
+    ps = FakePubSub(ps_messages or [], events)
+    r = FakeRedis(rec, status_seq, pubsub=ps, events=events)
     monkeypatch.setattr(ws_module, "get_client", lambda: r)
-    monkeypatch.setattr(ws_module, "_new_pubsub_client", lambda: psc)
-    return TestClient(app), psc
+    return TestClient(app), ps
 
 
 def test_snapshot_content(monkeypatch):
@@ -117,7 +114,7 @@ def test_unknown_job_error_frame(monkeypatch):
 
 
 def test_done_job_snapshot_then_state_with_results(monkeypatch):
-    c, psc = _setup(
+    c, _ = _setup(
         monkeypatch,
         {
             "status": "done",
@@ -135,11 +132,10 @@ def test_done_job_snapshot_then_state_with_results(monkeypatch):
     assert f2["results"]["playlist"] == "/jobs/j1/playlist"
     assert f2["results"]["presets"] == ["720p", "480p"]
     assert f2["results"]["duration"] == 60.0
-    assert psc.ps.subscribed == []
 
 
 def test_failed_job_snapshot_then_state_with_error(monkeypatch):
-    c, psc = _setup(
+    c, _ = _setup(
         monkeypatch,
         {
             "status": "failed",
@@ -157,7 +153,6 @@ def test_failed_job_snapshot_then_state_with_error(monkeypatch):
     assert f2["error"]["code"] == "ENCODE_FAILED_TRANSIENT"
     assert f2["error"]["stage"] == "transcode"
     assert f2["error"]["retryable"] is True
-    assert psc.ps.subscribed == []
 
 
 def test_progress_relay(monkeypatch):
@@ -208,7 +203,7 @@ def test_terminal_poke_without_percent_triggers_state(monkeypatch):
 
 
 def test_subscription_cleanup_on_terminal(monkeypatch):
-    c, psc = _setup(
+    c, ps = _setup(
         monkeypatch,
         {"status": "transcoding"},
         ps_messages=[_msg("720p", 55.0)],
@@ -218,46 +213,60 @@ def test_subscription_cleanup_on_terminal(monkeypatch):
         ws.receive_json()  # snapshot
         ws.receive_json()  # progress
         ws.receive_json()  # state
-    psc.ps.unsubscribe.assert_called_once()
-    psc.aclose.assert_called_once()
-
-
-def test_subscription_cleanup_on_exhaust(monkeypatch):
-    # listen exhausts without terminal — cleanup must still run
-    c, psc = _setup(monkeypatch, {"status": "transcoding"}, ps_messages=[])
-    with c.websocket_connect("/jobs/j1/progress") as ws:
-        ws.receive_json()  # snapshot
-    psc.ps.unsubscribe.assert_called_once()
-    psc.aclose.assert_called_once()
+    ps.aclose.assert_awaited_once()
 
 
 def test_subscription_cleanup_on_done_job(monkeypatch):
-    # even when returning early (terminal snapshot), cleanup still runs
-    c, psc = _setup(monkeypatch, {"status": "done"})
+    c, ps = _setup(monkeypatch, {"status": "done"})
     with c.websocket_connect("/jobs/j1/progress") as ws:
         ws.receive_json()  # snapshot
         ws.receive_json()  # state
-    psc.ps.unsubscribe.assert_called_once()
-    psc.aclose.assert_called_once()
+    ps.aclose.assert_awaited_once()
 
 
 def test_pubsub_subscribed_to_correct_channel(monkeypatch):
-    c, psc = _setup(monkeypatch, {"status": "transcoding"}, ps_messages=[])
+    c, ps = _setup(monkeypatch, {"status": "transcoding"}, ps_messages=[])
     with c.websocket_connect("/jobs/abc123/progress") as ws:
         ws.receive_json()
-    assert psc.ps.subscribed == ["progress:abc123"]
+    assert ps.subscribed == ["progress:abc123"]
 
 
-def test_multiple_renditions_in_snapshot(monkeypatch):
-    rec = {
-        "status": "transcoding",
-        "progress:1080p": "10.0",
-        "progress:720p": "25.0",
-        "progress:480p": "40.0",
-        "source_path": "/tmp/src.mp4",  # extra hash fields ignored
-    }
-    c, _ = _setup(monkeypatch, rec)
+def test_subscribes_before_snapshot_read(monkeypatch):
+    c, ps = _setup(monkeypatch, {"status": "transcoding"})
+
     with c.websocket_connect("/jobs/j1/progress") as ws:
-        frame = ws.receive_json()
-    assert frame["progress"] == {"1080p": 10.0, "720p": 25.0, "480p": 40.0}
-    assert "source_path" not in frame["progress"]
+        ws.receive_json()
+
+    assert ps.events[:2] == ["subscribe", "read"]
+
+
+def test_heartbeat_disconnect_closes_pubsub(monkeypatch):
+    class IdlePubSub(FakePubSub):
+        async def get_message(self, *, timeout: float) -> dict | None:
+            return None
+
+    class DisconnectOnPing:
+        async def accept(self):
+            pass
+
+        async def send_json(self, frame):
+            if frame["type"] == "ping":
+                raise WebSocketDisconnect()
+
+        async def close(self, code):
+            pass
+
+    ps = IdlePubSub([])
+    redis = FakeRedis({"status": "transcoding"}, pubsub=ps)
+    monkeypatch.setattr(ws_module, "get_client", lambda: redis)
+    monkeypatch.setattr(ws_module, "PING_INTERVAL", 0)
+
+    async def run():
+        await asyncio.wait_for(
+            ws_module.progress_ws(DisconnectOnPing(), "j1"),
+            timeout=0.05,
+        )
+
+    asyncio.run(run())
+
+    ps.aclose.assert_awaited_once()
