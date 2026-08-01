@@ -48,7 +48,7 @@ def test_refresh_calls_caddy_only_while_busy():
         assert sleep.refresh(client, "tideo-api.duckdns.org") is True
 
     assert [request.url.path for request in calls] == ["/status", "/readyz"]
-    assert calls[-1].headers["host"] == "tideo-api.duckdns.org"
+    assert calls[-1].url == httpx.URL("https://tideo-api.duckdns.org/readyz")
 
 
 def test_status_failure_refreshes_lease():

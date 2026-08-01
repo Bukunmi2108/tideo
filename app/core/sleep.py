@@ -9,7 +9,6 @@ from app.workers.routing import QUEUE_NAMES
 log = get_logger()
 
 STATUS_URL = "http://api:8000/status"
-LEASE_URL = "http://workspace-caddy/readyz"
 BUSY_STATES = ("inspecting", "queued", "transcoding")
 KAFKA_GROUPS = ("dispatcher", "audit")
 
@@ -45,7 +44,7 @@ def refresh(client: httpx.Client, host: str) -> bool:
     if not hold:
         return False
 
-    response = client.get(LEASE_URL, headers={"Host": host})
+    response = client.get(f"https://{host}/readyz")
     response.raise_for_status()
     return True
 
