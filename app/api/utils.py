@@ -1,17 +1,10 @@
-import uuid, string
-from datetime import datetime, timezone
-
-_B62 = string.digits + string.ascii_letters
+from datetime import UTC, datetime
+from secrets import token_urlsafe
 
 
 def now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
-def _b62(n: int) -> str:
-    out = ""
-    while n:
-        n, r = divmod(n, 62); out = _B62[r] + out
-    return out or "0"
 
 def new_job_id() -> str:
-    return "j_" + _b62(uuid.uuid4().int).rjust(22, "0")[:22]
+    return f"j_{token_urlsafe(16)}"
