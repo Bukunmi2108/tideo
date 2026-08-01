@@ -1,12 +1,11 @@
 import json
 from unittest.mock import AsyncMock
+
 from starlette.testclient import TestClient
 
-from app.api.main import app
 from app.api import ws as ws_module
+from app.api.main import app
 
-
-# ---- Fakes ----
 
 class FakeRedis:
     """Async Redis stub for the shared client (hgetall + hget only)."""
@@ -73,8 +72,6 @@ def _setup(monkeypatch, rec: dict, ps_messages=None, status_seq=None):
     return TestClient(app), psc
 
 
-# ---- Tests ----
-
 def test_snapshot_content(monkeypatch):
     c, _ = _setup(
         monkeypatch,
@@ -93,6 +90,23 @@ def test_snapshot_includes_presets(monkeypatch):
         frame = ws.receive_json()
     assert frame["type"] == "snapshot"
     assert frame["presets"] == ["720p", "480p"]
+
+
+def test_snapshot_malformed_fields_degrade(monkeypatch):
+    c, _ = _setup(
+        monkeypatch,
+        {
+            "status": "transcoding",
+            "presets": json.dumps({"720p": True}),
+            "progress:720p": "not-a-number",
+        },
+    )
+
+    with c.websocket_connect("/jobs/j1/progress") as ws:
+        frame = ws.receive_json()
+
+    assert frame["presets"] == []
+    assert frame["progress"] == {}
 
 
 def test_unknown_job_error_frame(monkeypatch):
@@ -142,6 +156,7 @@ def test_failed_job_snapshot_then_state_with_error(monkeypatch):
     assert f2["status"] == "failed"
     assert f2["error"]["code"] == "ENCODE_FAILED_TRANSIENT"
     assert f2["error"]["stage"] == "transcode"
+    assert f2["error"]["retryable"] is True
     assert psc.ps.subscribed == []
 
 

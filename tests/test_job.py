@@ -4,7 +4,6 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.api.main import app
-from app.api.model import progress_map, results_view
 from app.api.routes import job as job_route
 from app.storage.job_control import CancelResult
 
@@ -66,6 +65,23 @@ def seed(fake, job_id, **fields):
     fake.hashes[f"job:{job_id}"] = {k: str(v) for k, v in fields.items()}
 
 
+def source_meta(**overrides):
+    meta = {
+        "container": "mp4",
+        "video_codec": "h264",
+        "audio_codec": "aac",
+        "width": 1920,
+        "height": 1080,
+        "duration": 60.0,
+        "bitrate": 5_000_000,
+        "fps": 30.0,
+        "has_audio": True,
+        "video_streams": 1,
+        "audio_streams": 1,
+    }
+    return {**meta, **overrides}
+
+
 # ---- 404 / 410 contracts ----
 
 def test_unknown_id_is_404(client):
@@ -95,7 +111,7 @@ def test_inspecting_returns_status_only(client):
 
 def test_awaiting_choice_shape(client):
     c, fake = client
-    meta = {"container": "mp4", "video_codec": "h264", "height": 1080}
+    meta = source_meta()
     seed(
         fake, "j2",
         status="awaiting_choice",
@@ -119,7 +135,7 @@ def test_web_safe_false_keeps_reason(client):
     seed(
         fake, "j2b",
         status="awaiting_choice",
-        source_meta=json.dumps({"height": 720}),
+        source_meta=json.dumps(source_meta(height=720)),
         recommended_presets=json.dumps(["720p"]),
         web_safe="false",
         web_safe_reason="container is matroska",
@@ -127,6 +143,23 @@ def test_web_safe_false_keeps_reason(client):
     body = c.get("/jobs/j2b").json()
     assert body["web_safe"] is False
     assert body["web_safe_reason"] == "container is matroska"
+
+
+def test_awaiting_choice_malformed_recommendations_degrade(client):
+    c, fake = client
+    seed(
+        fake,
+        "j2c",
+        status="awaiting_choice",
+        source_meta=json.dumps(source_meta()),
+        recommended_presets=json.dumps({"720p": True}),
+        web_safe="true",
+    )
+
+    response = c.get("/jobs/j2c")
+
+    assert response.status_code == 200
+    assert response.json()["recommended_presets"] == []
 
 
 @pytest.mark.parametrize("status", ["queued", "transcoding"])
@@ -149,6 +182,18 @@ def test_in_progress_with_no_renditions_yet_is_empty_map(client):
     assert body["presets"] == []
 
 
+def test_in_progress_malformed_fields_degrade(client):
+    c, fake = client
+    seed(fake, "j3c", status="transcoding", presets="{truncated")
+    fake.hashes["job:j3c"]["progress:720p"] = "not-a-number"
+
+    response = c.get("/jobs/j3c")
+
+    assert response.status_code == 200
+    assert response.json()["presets"] == []
+    assert response.json()["progress"] == {}
+
+
 def test_done_returns_results_urls(client):
     c, fake = client
     seed(
@@ -169,41 +214,6 @@ def test_done_returns_results_urls(client):
         "duration": 120.5,
         "subtitles": None,
     }
-
-
-# ---- results_view / progress_map: pure helpers, shared by GET + WS ----
-
-def test_results_view_full():
-    rec = {"presets": json.dumps(["720p", "480p"]), "source_meta": json.dumps({"duration": 60.0})}
-    out = results_view("jX", rec)
-    assert out["playlist"] == "/jobs/jX/playlist"
-    assert out["presets"] == ["720p", "480p"]
-    assert out["duration"] == 60.0
-
-
-def test_results_view_missing_fields_degrades():
-    out = results_view("jX", {})
-    assert out["presets"] == []
-    assert out["duration"] is None
-    assert out["playlist"] == "/jobs/jX/playlist"
-
-
-def test_results_view_source_meta_without_duration():
-    out = results_view("jX", {"source_meta": json.dumps({"width": 1280})})
-    assert out["duration"] is None
-
-
-@pytest.mark.parametrize("bad", ["{truncated", "not json", "null"])
-def test_results_view_malformed_json_fails_soft(bad):
-    out = results_view("jX", {"presets": bad, "source_meta": bad})
-    assert out["presets"] == []
-    assert out["duration"] is None
-    assert out["web_mp4"] == "/jobs/jX/file"
-
-
-def test_progress_map_extracts_only_progress_fields():
-    rec = {"status": "transcoding", "progress:720p": "100.0", "progress:480p": "0.0", "source_path": "/x"}
-    assert progress_map(rec) == {"720p": 100.0, "480p": 0.0}
 
 
 # ---- cancel ----
@@ -262,6 +272,23 @@ def test_failed_returns_error_envelope(client):
     err = body.json()["error"]
     assert err["code"] == "SOURCE_NO_VIDEO"
     assert err["stage"] == "inspect"
+    assert err["retryable"] is False
+
+
+def test_retryable_failure_is_exposed(client):
+    c, fake = client
+    seed(
+        fake,
+        "j5b",
+        status="failed",
+        error_code="ENCODE_TIMEOUT",
+        error_message="timed out",
+        error_stage="transcode",
+    )
+
+    error = c.get("/jobs/j5b").json()["error"]
+
+    assert error["retryable"] is True
 
 
 # ---- GET /jobs (history list, from Postgres) ----
@@ -374,6 +401,7 @@ def test_get_falls_back_to_postgres_for_failed(client, monkeypatch):
                                             error_stage="transcode"))
     body = c.get("/jobs/jgone").json()
     assert body["status"] == "failed" and body["error"]["code"] == "ENCODE_TIMEOUT"
+    assert body["error"]["retryable"] is True
 
 
 def test_get_expired_cold_row_is_410(client, monkeypatch):

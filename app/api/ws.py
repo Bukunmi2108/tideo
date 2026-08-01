@@ -1,9 +1,11 @@
 import asyncio
 import json
 from typing import cast
+
 import redis.asyncio as aioredis
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
-from app.api.model import progress_map, results_view
+
+from app.api.model import error_view, json_list, progress_map, results_view
 from app.core.config import config
 from app.core.logging import bind_job, get_logger
 from app.domain.state import TERMINAL
@@ -28,10 +30,7 @@ async def _send_terminal(ws: WebSocket, r, job_id: str, status: str) -> None:
         if status == "done":
             frame["results"] = results_view(job_id, rec)
         else:
-            frame["error"] = {
-                "code": rec.get("error_code"), "message": rec.get("error_message"),
-                "stage": rec.get("error_stage"), "retryable": False,
-            }
+            frame["error"] = error_view(rec)
     await ws.send_json(frame)
     await ws.close(code=1001)
 
@@ -55,8 +54,8 @@ async def progress_ws(ws: WebSocket, job_id: str):
         await ws.send_json({
             "type": "snapshot",
             "status": status,
-            "presets": json.loads(rec["presets"]) if rec.get("presets") else [],
-            "progress": progress_map(rec),
+            "presets": json_list(rec, "presets", job_id),
+            "progress": progress_map(rec, job_id),
         })
 
         # already terminal — send state frame + close immediately

@@ -10,6 +10,8 @@ from app.api.errors import ApiError, ErrorResponse, StoragePressure
 from app.api.model import (
     JobListResponse,
     JobResponse,
+    error_view,
+    json_list,
     progress_map,
     results_view,
     results_view_pg,
@@ -59,7 +61,6 @@ def _job_summary(row: dict) -> dict:
     job_id, status, finished = row["job_id"], row["status"], row.get("finished_at")
     duration = row.get("source_duration_s")
     poster_avail = status == "done" and (config.output_dir / job_id / "poster.jpg").exists()
-    # the 7.2 sweep deletes done jobs at finished_at + OUTPUT_TTL_DAYS — that's the countdown anchor
     expires_at = (finished + timedelta(days=config.output_ttl_days)) if status == "done" and finished else None
     return {
         "job_id": job_id,
@@ -82,11 +83,8 @@ def _response_from_pg(job_id: str, row: dict) -> dict:
     if status == "done":
         resp["results"] = results_view_pg(job_id, row)
     elif status == "failed":
-        resp["error"] = {
-            "code": row.get("error_code"), "message": row.get("error_message"),
-            "stage": row.get("error_stage"), "retryable": False,
-        }
-    return resp                                              # cancelled: status only, like the hot path
+        resp["error"] = error_view(row)
+    return resp
 
 
 @router.get("/jobs", response_model=JobListResponse)
@@ -109,7 +107,7 @@ async def list_jobs(
 async def get_job(job_id: str):
     bind_job(job_id)
     rec = await get_client().hgetall(f"job:{job_id}")
-    if not rec or "status" not in rec:                   # hot state gone/torn -> fall back to the cold tier
+    if not rec or "status" not in rec:
         row = await run_in_threadpool(db_get_job, job_id)
         if not row:
             raise ApiError(404, "JOB_NOT_FOUND", "no such job", job_id=job_id)
@@ -121,19 +119,16 @@ async def get_job(job_id: str):
     resp = {"job_id": job_id, "status": status, "source_filename": rec.get("source_filename") or None}
     if status == "awaiting_choice":
         resp["source"] = json.loads(rec["source_meta"])
-        resp["recommended_presets"] = json.loads(rec["recommended_presets"])
+        resp["recommended_presets"] = json_list(rec, "recommended_presets", job_id)
         resp["web_safe"] = rec["web_safe"] == "true"
         resp["web_safe_reason"] = rec.get("web_safe_reason") or None
     elif status in ("queued", "transcoding"):
-        resp["progress"] = progress_map(rec)
-        resp["presets"] = json.loads(rec["presets"]) if rec.get("presets") else []
+        resp["progress"] = progress_map(rec, job_id)
+        resp["presets"] = json_list(rec, "presets", job_id)
     elif status == "done":
         resp["results"] = results_view(job_id, rec)
     elif status == "failed":
-        resp["error"] = {
-            "code": rec.get("error_code"), "message": rec.get("error_message"),
-            "stage": rec.get("error_stage"), "retryable": False,
-        }
+        resp["error"] = error_view(rec)
     return resp
 
 @router.post("/jobs/{job_id}/transcode", status_code=202)
@@ -156,7 +151,7 @@ async def transcode(job_id: str, body: TranscodeRequest):
     if not body.presets or bad:
         raise ApiError(422, "PRESET_NOT_RECOMMENDED",
                        f"presets not in recommendation: {bad or body.presets}", job_id=job_id)
-    if under_pressure():                                   # gate new encode work; in-flight jobs are untouched
+    if under_pressure():
         raise StoragePressure(job_id)
 
     try:
