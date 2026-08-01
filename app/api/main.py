@@ -1,12 +1,9 @@
 import asyncio
 from contextlib import asynccontextmanager
-from pathlib import Path
 
 from fastapi import FastAPI, Request, Response, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
-from fastapi.responses import FileResponse
 from psycopg2 import InterfaceError, OperationalError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
@@ -25,45 +22,20 @@ log = get_logger()
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    configure_logging("api")                     # after uvicorn's own setup, so the JSON formatter wins
+    configure_logging("api")
     ensure_topics()
     init_schema()
     yield
     flush_producer()
 
 
-FAVICON = Path(__file__).parent / "static" / "favicon.ico"
-DOCS_TITLE = "Tideo — adaptive video transcoding"
-
 app = FastAPI(
     title="Tideo",
     version="0.0.1",
     summary="Distributed video transcoding — one source file into an adaptive HLS ladder, encoded in parallel.",
     lifespan=lifespan,
-    docs_url=None,
     redoc_url=None,
 )
-
-
-@app.get("/favicon.ico", include_in_schema=False)
-async def favicon():
-    return FileResponse(FAVICON)
-
-
-@app.get("/docs", include_in_schema=False)
-async def swagger_ui():
-    return get_swagger_ui_html(
-        openapi_url=app.openapi_url or "/openapi.json", title=DOCS_TITLE,
-        swagger_favicon_url="/favicon.ico",
-    )
-
-
-@app.get("/redoc", include_in_schema=False)
-async def redoc_ui():
-    return get_redoc_html(
-        openapi_url=app.openapi_url or "/openapi.json", title=DOCS_TITLE,
-        redoc_favicon_url="/favicon.ico",
-    )
 
 app.add_middleware(
     CORSMiddleware,
@@ -79,7 +51,6 @@ app.include_router(artifacts.router)
 app.include_router(status_routes.router)
 app.include_router(ws_module.router)
 
-# (name, host, port) for every dependency /readyz probes.
 DEPENDENCIES = [
     ("redis", config.redis_host, config.redis_port),
     ("postgres", config.postgres_host, config.postgres_port),
@@ -119,7 +90,6 @@ async def _http_error(request: Request, exc: StarletteHTTPException):
 
 
 async def _db_unavailable(_request: Request, exc: Exception):
-    # transient DB outage on a read -> retryable 503; non-transient psycopg2 errors fall through to 500
     log.warning("db_unavailable_on_read", error=str(exc))
     return error_response(
         503,
@@ -139,13 +109,10 @@ async def _unhandled(_request: Request, _exc: Exception):
 
 @app.get("/healthz")
 def healthz():
-    """Liveness Check"""
     return {"status": "ok"}
 
 
 async def _probe(host: str, port: int) -> bool:
-    """TCP-connect probe: proves the port is accepting connections, bounded by a timeout, and never raises — any failure means 'not ready'.
-    """
     writer = None
     try:
         _, writer = await asyncio.wait_for(
@@ -162,7 +129,6 @@ async def _probe(host: str, port: int) -> bool:
 
 @app.get("/readyz")
 async def readyz(response: Response):
-    """Readiness Check"""
     results = await asyncio.gather(
         *(_probe(host, port) for _, host, port in DEPENDENCIES)
     )
