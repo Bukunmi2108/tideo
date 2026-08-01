@@ -22,6 +22,7 @@ def test_typed_defaults():
     assert cfg.max_upload_bytes == 4 * 1024**3
     assert cfg.data_dir == Path("/data")
     assert cfg.profile == "dev"
+    assert cfg.allowed_origin_list == ["http://localhost:5173"]
 
 
 def test_malformed_value_fails_naming_it():
@@ -33,6 +34,17 @@ def test_malformed_value_fails_naming_it():
 def test_invalid_profile_rejected():
     with pytest.raises(ValidationError):
         _cfg(profile="prod")
+
+
+def test_allowed_origins_are_normalized_and_validated():
+    cfg = _cfg(allowed_origins="https://tideo.vercel.app, http://localhost:5173/")
+    assert cfg.allowed_origin_list == [
+        "https://tideo.vercel.app",
+        "http://localhost:5173",
+    ]
+
+    with pytest.raises(ValidationError):
+        _cfg(allowed_origins="*")
 
 
 @pytest.mark.parametrize("value", ["invalid", "3", "0/60", "3/0", "-1/60", "3/-1"])

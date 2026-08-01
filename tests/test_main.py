@@ -15,6 +15,19 @@ def test_public_surfaces():
     assert response.json() == {"status": "ok"}
 
 
+def test_cors_allows_only_configured_browser_origins():
+    allowed = main_module.config.allowed_origin_list[0]
+    headers = {"access-control-request-method": "POST"}
+
+    response = client.options("/upload", headers={**headers, "origin": allowed})
+    rejected = client.options(
+        "/upload", headers={**headers, "origin": "https://example.invalid"}
+    )
+
+    assert response.headers["access-control-allow-origin"] == allowed
+    assert "access-control-allow-origin" not in rejected.headers
+
+
 def test_readyz_names_failed_dependencies(monkeypatch):
     async def probe(host, _port):
         return host == "up"

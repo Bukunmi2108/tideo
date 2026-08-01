@@ -65,7 +65,7 @@ Two brokers, on purpose — the project is a deliberate study of distributed-sys
 |---|---|---|
 | `app/` | FastAPI API, Celery tasks per queue, Kafka producer/consumers, dispatcher, storage layer | FastAPI · Celery · Python 3.12 · FFmpeg |
 | `frontend/` | SPA — upload, inspect/commit, library, Netflix-style immersive watch page | Vite · vanilla TypeScript · `hls.js` (only runtime dep) |
-| `deploy/` | the whole stack in one image (Postgres · Redis · RabbitMQ · Kafka · API · workers) under supervisord → [HF Space](https://huggingface.co/spaces/Bukunmi2108/tideo) | Docker · supervisord |
+| `deploy/` | HF Space image plus the Workspace VPS Compose topology and exact-revision deploy command | Docker · Compose · Sablier · supervisord |
 
 ## Repo layout
 
@@ -73,7 +73,7 @@ Two brokers, on purpose — the project is a deliberate study of distributed-sys
 |---|---|
 | `app/` | backend — `api/` routes, `workers/` (inspect/rendition/package/transcribe/cleanup), `dispatcher/`, `domain/` (ladder, errors, state, playlist), `events/` (Kafka), `storage/` (Redis, Postgres, dedupe, pressure) |
 | `frontend/` | Vite vanilla-TS SPA — `router.ts`, `landing.ts`, `upload.ts`, `history.ts`, `job.ts`, `player.ts`, `sprite.ts` |
-| `deploy/` | single-container HF Space — `Dockerfile`, `supervisord.conf`, per-service start scripts |
+| `deploy/` | legacy single-container HF Space and sleep-aware Workspace VPS deployment |
 | `docs/` | `PLAN.md`, phase writeups, ADRs, chaos drills |
 | `fixtures/` · `scripts/` | generated test videos + their build/verify scripts |
 | `tests/` | ~43 pytest files incl. a classified FFmpeg-stderr corpus and chaos drills |
@@ -93,6 +93,15 @@ make fixtures
 
 Tests: `uv run pytest` (backend) · `npm test` in `frontend/` (vitest). The single-container image that
 runs on Hugging Face lives under `deploy/`.
+
+## Workspace VPS
+
+`deploy/compose.production.yaml` runs the same distributed pipeline as separate containers, uses the
+Workspace PostgreSQL service, and gives every Tideo-owned container the `tideo` Sablier group. Redis,
+RabbitMQ, Kafka, uploads, and outputs use persistent volumes. `app.core.sleep` refreshes the session
+while jobs, queues, or Kafka consumer lag remain; once they drain, the standard idle timer can stop the
+whole group. Runtime values start from `deploy/.env.example`, and `deploy/deploy.sh` deploys one exact
+Git SHA without overwriting the VPS `.env` file.
 
 ## Attribution
 

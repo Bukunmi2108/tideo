@@ -1,0 +1,361 @@
+name: tideo
+
+x-sleep-labels: &sleep-labels
+  sablier.enable: "true"
+  sablier.group: tideo
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: workspace-tideo-redis
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --appendfsync
+      - everysec
+      - --save
+      - ""
+      - --maxmemory
+      - 512mb
+      - --maxmemory-policy
+      - noeviction
+    restart: unless-stopped
+    labels: *sleep-labels
+    volumes:
+      - redis_data:/data
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    mem_limit: 640m
+    cpus: 0.5
+    stop_grace_period: 30s
+    security_opt:
+      - no-new-privileges:true
+
+  rabbitmq:
+    image: rabbitmq:4.0-management-alpine
+    container_name: workspace-tideo-rabbitmq
+    hostname: workspace-tideo-rabbitmq
+    env_file:
+      - ${TIDEO_ENV_FILE:-./.env}
+    restart: unless-stopped
+    labels: *sleep-labels
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 45s
+    mem_limit: 768m
+    cpus: 0.75
+    stop_grace_period: 1m
+    security_opt:
+      - no-new-privileges:true
+
+  kafka:
+    image: confluentinc/cp-kafka:7.8.0
+    container_name: workspace-tideo-kafka
+    hostname: kafka
+    env_file:
+      - ${TIDEO_SOURCE_ROOT:-./source}/kafka.env
+    environment:
+      KAFKA_HEAP_OPTS: -Xms256m -Xmx768m
+    restart: unless-stopped
+    labels: *sleep-labels
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD-SHELL", "echo > /dev/tcp/127.0.0.1/9092 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 18
+      start_period: 90s
+    mem_limit: 1g
+    cpus: 1.0
+    stop_grace_period: 2m
+    security_opt:
+      - no-new-privileges:true
+
+  api:
+    build:
+      context: ${TIDEO_SOURCE_ROOT:-./source}
+      dockerfile: Dockerfile.api
+    image: tideo-api:${TIDEO_IMAGE_TAG:-local}
+    container_name: workspace-tideo
+    env_file:
+      - ${TIDEO_ENV_FILE:-./.env}
+    expose:
+      - "8000"
+    restart: unless-stopped
+    labels: *sleep-labels
+    volumes:
+      - data:/data
+    networks:
+      - internal
+      - gateway
+      - workspace_data
+    depends_on:
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/readyz', timeout=5)"
+      interval: 10s
+      timeout: 6s
+      retries: 12
+      start_period: 20s
+    mem_limit: 768m
+    cpus: 0.75
+    stop_grace_period: 30s
+    security_opt:
+      - no-new-privileges:true
+
+  worker-heavy:
+    build:
+      context: ${TIDEO_SOURCE_ROOT:-./source}
+      dockerfile: Dockerfile.worker
+    image: tideo-worker:${TIDEO_IMAGE_TAG:-local}
+    container_name: workspace-tideo-worker-heavy
+    command:
+      - celery
+      - -q
+      - -A
+      - app.workers.celery_app
+      - worker
+      - -Q
+      - transcode
+      - --concurrency=${TIDEO_HEAVY_CONCURRENCY:-1}
+      - --prefetch-multiplier=1
+      - -n
+      - heavy@%h
+      - --loglevel=info
+    env_file:
+      - ${TIDEO_ENV_FILE:-./.env}
+    restart: unless-stopped
+    labels: *sleep-labels
+    volumes:
+      - data:/data
+    networks:
+      - internal
+      - workspace_data
+    depends_on:
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    mem_limit: 3g
+    cpus: 3.0
+    stop_grace_period: 35m
+    security_opt:
+      - no-new-privileges:true
+
+  worker-fast:
+    build:
+      context: ${TIDEO_SOURCE_ROOT:-./source}
+      dockerfile: Dockerfile.worker
+    image: tideo-worker:${TIDEO_IMAGE_TAG:-local}
+    container_name: workspace-tideo-worker-fast
+    command:
+      - celery
+      - -q
+      - -A
+      - app.workers.celery_app
+      - worker
+      - -Q
+      - inspect,package,cleanup
+      - --concurrency=${TIDEO_FAST_CONCURRENCY:-2}
+      - --prefetch-multiplier=1
+      - -n
+      - fast@%h
+      - --loglevel=info
+    env_file:
+      - ${TIDEO_ENV_FILE:-./.env}
+    restart: unless-stopped
+    labels: *sleep-labels
+    volumes:
+      - data:/data
+    networks:
+      - internal
+      - workspace_data
+    depends_on:
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    mem_limit: 1g
+    cpus: 1.0
+    stop_grace_period: 5m
+    security_opt:
+      - no-new-privileges:true
+
+  worker-transcribe:
+    build:
+      context: ${TIDEO_SOURCE_ROOT:-./source}
+      dockerfile: Dockerfile.worker
+    image: tideo-worker:${TIDEO_IMAGE_TAG:-local}
+    container_name: workspace-tideo-worker-transcribe
+    command:
+      - celery
+      - -q
+      - -A
+      - app.workers.celery_app
+      - worker
+      - -Q
+      - transcribe
+      - --concurrency=${TIDEO_TRANSCRIBE_CONCURRENCY:-1}
+      - --prefetch-multiplier=1
+      - -n
+      - transcribe@%h
+      - --loglevel=info
+    env_file:
+      - ${TIDEO_ENV_FILE:-./.env}
+    restart: unless-stopped
+    labels: *sleep-labels
+    volumes:
+      - data:/data
+    networks:
+      - internal
+      - workspace_data
+    depends_on:
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    mem_limit: 2g
+    cpus: 1.5
+    stop_grace_period: 12m
+    security_opt:
+      - no-new-privileges:true
+
+  dispatcher:
+    image: tideo-worker:${TIDEO_IMAGE_TAG:-local}
+    container_name: workspace-tideo-dispatcher
+    command: ["python", "-m", "app.dispatcher"]
+    env_file:
+      - ${TIDEO_ENV_FILE:-./.env}
+    restart: unless-stopped
+    labels: *sleep-labels
+    networks:
+      - internal
+    depends_on:
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    mem_limit: 384m
+    cpus: 0.5
+    stop_grace_period: 30s
+    security_opt:
+      - no-new-privileges:true
+
+  audit:
+    image: tideo-worker:${TIDEO_IMAGE_TAG:-local}
+    container_name: workspace-tideo-audit
+    command: ["python", "-m", "app.dispatcher.audit"]
+    env_file:
+      - ${TIDEO_ENV_FILE:-./.env}
+    restart: unless-stopped
+    labels: *sleep-labels
+    networks:
+      - internal
+      - workspace_data
+    depends_on:
+      kafka:
+        condition: service_healthy
+    mem_limit: 384m
+    cpus: 0.5
+    stop_grace_period: 30s
+    security_opt:
+      - no-new-privileges:true
+
+  beat:
+    image: tideo-worker:${TIDEO_IMAGE_TAG:-local}
+    container_name: workspace-tideo-beat
+    command:
+      - celery
+      - -q
+      - -A
+      - app.workers.celery_app
+      - beat
+      - --schedule=/data/celerybeat-schedule
+      - --loglevel=info
+    env_file:
+      - ${TIDEO_ENV_FILE:-./.env}
+    restart: unless-stopped
+    labels: *sleep-labels
+    volumes:
+      - data:/data
+    networks:
+      - internal
+    depends_on:
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    mem_limit: 256m
+    cpus: 0.25
+    stop_grace_period: 30s
+    security_opt:
+      - no-new-privileges:true
+
+  sleep-lease:
+    image: tideo-api:${TIDEO_IMAGE_TAG:-local}
+    container_name: workspace-tideo-sleep-lease
+    command: ["python", "-m", "app.core.sleep"]
+    env_file:
+      - ${TIDEO_ENV_FILE:-./.env}
+    restart: unless-stopped
+    labels: *sleep-labels
+    networks:
+      - internal
+      - gateway
+    depends_on:
+      api:
+        condition: service_healthy
+    mem_limit: 192m
+    cpus: 0.25
+    stop_grace_period: 15s
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  data:
+    name: workspace_tideo_data
+  redis_data:
+    name: workspace_tideo_redis_data
+  rabbitmq_data:
+    name: workspace_tideo_rabbitmq_data
+  kafka_data:
+    name: workspace_tideo_kafka_data
+
+networks:
+  internal:
+    name: workspace_tideo_internal
+    internal: true
+  gateway:
+    name: workspace_gateway
+    external: true
+  workspace_data:
+    name: workspace_data
+    external: true
