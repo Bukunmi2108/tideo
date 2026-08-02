@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from typing import Literal, cast
 
 from app.domain.state import ACTIVE, transition
+from app.storage.state import EVENT_OUTBOX
 
 _TRANSITION = """
 local current = redis.call('HGET', KEYS[1], 'status')
@@ -21,6 +22,22 @@ if ARGV[4] == '1' then
     redis.call('HINCRBY', KEYS[2], ARGV[2], 1)
 end
 return {1, ARGV[2]}
+"""
+
+_QUEUE_JOB = """
+local current = redis.call('HGET', KEYS[1], 'status')
+if current ~= 'awaiting_choice' then
+    return {0, current or ''}
+end
+
+redis.call('HSET', KEYS[1],
+    'status', 'queued',
+    'presets', ARGV[1],
+    'subtitles', ARGV[2])
+redis.call('HINCRBY', KEYS[2], 'awaiting_choice', -1)
+redis.call('HINCRBY', KEYS[2], 'queued', 1)
+redis.call('HSET', KEYS[3], ARGV[3], ARGV[4])
+return {1, 'queued'}
 """
 
 _RESERVE_DISPATCH = """
@@ -158,6 +175,31 @@ async def atransition_status(
         if int(result[0]) == 1:
             return target
     raise RuntimeError(f"transition contention did not settle for job {job_id}")
+
+
+async def aqueue_job(
+    r,
+    job_id: str,
+    *,
+    presets: str,
+    subtitles: bool,
+    event_id: str,
+    event_json: str,
+) -> str | None:
+    """Atomically queue a job and retain its dispatch-triggering event until Kafka acknowledges it."""
+    transition("awaiting_choice", "queued", job_id=job_id, caller="transcode")
+    result = await r.eval(
+        _QUEUE_JOB,
+        3,
+        f"job:{job_id}",
+        "stats:active",
+        EVENT_OUTBOX,
+        presets,
+        "true" if subtitles else "false",
+        event_id,
+        event_json,
+    )
+    return "queued" if int(result[0]) == 1 else None
 
 
 @dataclass(frozen=True)

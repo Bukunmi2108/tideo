@@ -32,14 +32,18 @@ def client(monkeypatch):
     fake = FakeRedis()
     spy = []
     monkeypatch.setattr(job_route, "get_client", lambda: fake)
-    monkeypatch.setattr(job_route, "publish", lambda env: spy.append(env))
     monkeypatch.setattr(job_route, "under_pressure", lambda: False)   # deterministic: not shedding by default
 
-    async def transition_status(r, job_id, target, *, caller, extra=None):
-        r.hashes[f"job:{job_id}"].update({"status": target, **(extra or {})})
-        return target
+    async def queue_job(r, job_id, *, presets, subtitles, event_id, event_json):
+        r.hashes[f"job:{job_id}"].update({
+            "status": "queued",
+            "presets": presets,
+            "subtitles": "true" if subtitles else "false",
+        })
+        spy.append(json.loads(event_json))
+        return "queued"
 
-    monkeypatch.setattr(job_route, "atransition_status", transition_status)
+    monkeypatch.setattr(job_route, "aqueue_job", queue_job)
     return TestClient(app, raise_server_exceptions=False), fake, spy
 
 
@@ -108,7 +112,21 @@ def test_duplicate_presets_are_rejected_without_mutating_job(client):
     assert spy == []
 
 
-def test_valid_commit_queues_and_produces_exactly_one_event(client):
+@pytest.mark.parametrize("duration", [None, 0, -1, float("nan"), "30"])
+def test_invalid_source_duration_never_queues_poison_event(client, duration):
+    c, fake, spy = client
+    seed_awaiting(fake, "j_bad_meta", ["480p"])
+    fake.hashes["job:j_bad_meta"]["source_meta"] = json.dumps({"duration": duration})
+
+    response = c.post("/jobs/j_bad_meta/transcode", json={"presets": ["480p"]})
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "INVALID_SOURCE_METADATA"
+    assert fake.hashes["job:j_bad_meta"]["status"] == "awaiting_choice"
+    assert spy == []
+
+
+def test_valid_commit_queues_and_stores_exactly_one_event(client):
     c, fake, spy = client
     seed_awaiting(fake, "j4", ["1080p", "720p", "480p"])
     r = c.post("/jobs/j4/transcode", json={"presets": ["720p", "480p"], "subtitles": True})
@@ -124,8 +142,24 @@ def test_valid_commit_queues_and_produces_exactly_one_event(client):
     # exactly one job.created, keyed to this job, carrying the choices + duration
     assert len(spy) == 1
     env = spy[0]
-    assert env.event_type == "job.created"
-    assert env.job_id == "j4"
-    assert env.payload["presets"] == ["720p", "480p"]
-    assert env.payload["subtitles"] is True
-    assert env.payload["source_duration"] == 30.0
+    assert env["event_type"] == "job.created"
+    assert env["job_id"] == "j4"
+    assert env["payload"]["presets"] == ["720p", "480p"]
+    assert env["payload"]["subtitles"] is True
+    assert env["payload"]["source_duration"] == 30.0
+
+
+def test_outbox_failure_leaves_job_awaiting_choice(client, monkeypatch):
+    c, fake, spy = client
+    seed_awaiting(fake, "j_fail", ["480p"])
+
+    async def fail(*_args, **_kwargs):
+        raise ConnectionError("redis unavailable")
+
+    monkeypatch.setattr(job_route, "aqueue_job", fail)
+
+    response = c.post("/jobs/j_fail/transcode", json={"presets": ["480p"]})
+
+    assert response.status_code == 500
+    assert fake.hashes["job:j_fail"]["status"] == "awaiting_choice"
+    assert spy == []

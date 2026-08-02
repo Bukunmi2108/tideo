@@ -1,4 +1,5 @@
 import json
+import math
 import shutil
 from datetime import timedelta
 
@@ -18,14 +19,14 @@ from app.api.model import (
 )
 from app.core.config import config
 from app.core.logging import bind_job, get_logger
-from app.domain.state import TERMINAL, IllegalTransition
+from app.domain.state import TERMINAL
 from app.events.envelope import Envelope
-from app.events.producer import emit, publish
+from app.events.producer import emit
 from app.events.topics import JOB_CANCELLED, JOB_CREATED
 from app.storage.db import get_job as db_get_job
 from app.storage.db import list_jobs as db_list_jobs
 from app.storage.db import persist_terminal
-from app.storage.job_control import acancel_job, atransition_status
+from app.storage.job_control import acancel_job, aqueue_job
 from app.storage.pressure import under_pressure
 from app.storage.state import get_client
 from app.workers.celery_app import app as celery_app
@@ -154,22 +155,33 @@ async def transcode(job_id: str, body: TranscodeRequest):
     if under_pressure():
         raise StoragePressure(job_id)
 
-    try:
-        nxt = await atransition_status(r, job_id, "queued", caller="transcode", extra={
-            "presets": json.dumps(body.presets),
-            "subtitles": "true" if body.subtitles else "false",
-        })
-    except IllegalTransition:
-        current = await r.hget(f"job:{job_id}", "status")
-        raise ApiError(409, "WRONG_STATE", f"job is {current}, not awaiting_choice", job_id=job_id)
+    duration = json.loads(rec["source_meta"]).get("duration")
+    if (
+        isinstance(duration, bool)
+        or not isinstance(duration, (int, float))
+        or not math.isfinite(duration)
+        or duration <= 0
+    ):
+        raise ApiError(
+            409,
+            "INVALID_SOURCE_METADATA",
+            "source duration is missing or invalid",
+            job_id=job_id,
+        )
+    event = Envelope(JOB_CREATED, job_id, {
+        "presets": body.presets, "subtitles": body.subtitles, "source_duration": duration,
+    })
+    nxt = await aqueue_job(
+        r,
+        job_id,
+        presets=json.dumps(body.presets),
+        subtitles=body.subtitles,
+        event_id=event.event_id,
+        event_json=event.to_json(),
+    )
     if nxt is None:
         current = await r.hget(f"job:{job_id}", "status")
         raise ApiError(409, "WRONG_STATE", f"job is {current}, not awaiting_choice", job_id=job_id)
-
-    duration = json.loads(rec["source_meta"]).get("duration")
-    publish(Envelope(JOB_CREATED, job_id, {
-        "presets": body.presets, "subtitles": body.subtitles, "source_duration": duration,
-    }))
     return {"job_id": job_id, "status": nxt}
 
 

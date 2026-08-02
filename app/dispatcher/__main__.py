@@ -1,16 +1,17 @@
 import signal
 import time
+from datetime import UTC, datetime
 
 from confluent_kafka import Consumer, TopicPartition
 from kombu.exceptions import OperationalError
 from redis.exceptions import RedisError
 
-from app.api.utils import now_iso
 from app.core.config import config
 from app.core.logging import bind_job, clear_log_context, configure_logging, get_logger
 from app.dispatcher.dispatch import dispatch_job
 from app.dispatcher.guard import claim, release
 from app.dispatcher.handler import BadEvent, parse_event, process
+from app.events.outbox import drain as drain_outbox
 from app.events.topics import TOPIC
 from app.storage.state import get_sync_client
 
@@ -22,7 +23,11 @@ def _stop(*_):
     _running = False
 
 def _heartbeat():
-    get_sync_client().set("dispatcher:heartbeat", now_iso(), ex=config.dispatcher_heartbeat_ttl)
+    get_sync_client().set(
+        "dispatcher:heartbeat",
+        datetime.now(UTC).isoformat(),
+        ex=config.dispatcher_heartbeat_ttl,
+    )
 
 def _enqueue(env: dict):
     dispatch_job(
@@ -47,6 +52,10 @@ def run():
         next_heartbeat = time.monotonic() + config.dispatcher_heartbeat_ttl / 3
         while _running:
             clear_log_context()
+            try:
+                drain_outbox(get_sync_client())
+            except RedisError:
+                log.exception("event_outbox_unavailable")
             msg = consumer.poll(1.0)
             now = time.monotonic()
             if now >= next_heartbeat:

@@ -4,10 +4,12 @@ import json
 from app.storage.job_control import (
     DispatchPlan,
     acancel_job,
+    aqueue_job,
     atransition_status,
     reserve_dispatch,
     transition_status,
 )
+from app.storage.state import EVENT_OUTBOX
 
 
 class FakeRedis:
@@ -63,6 +65,36 @@ def test_expected_async_transition_does_not_follow_an_advanced_job():
 
     assert result is None
     assert len(r.calls) == 1
+
+
+def test_queue_job_writes_state_and_exact_event_in_one_eval():
+    class AsyncRedis:
+        def __init__(self):
+            self.calls = []
+
+        async def eval(self, script, key_count, *args):
+            self.calls.append((script, key_count, args))
+            return [1, "queued"]
+
+    r = AsyncRedis()
+    event_json = '{"event_id":"evt-1"}'
+
+    result = asyncio.run(
+        aqueue_job(
+            r,
+            "j1",
+            presets='["720p"]',
+            subtitles=True,
+            event_id="evt-1",
+            event_json=event_json,
+        )
+    )
+
+    assert result == "queued"
+    _, key_count, args = r.calls[0]
+    assert key_count == 3
+    assert args[:3] == ("job:j1", "stats:active", EVENT_OUTBOX)
+    assert args[3:] == ('["720p"]', "true", "evt-1", event_json)
 
 
 def test_reserve_dispatch_returns_the_plan_redis_committed():

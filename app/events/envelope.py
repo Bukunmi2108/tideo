@@ -1,9 +1,8 @@
 import json
 import socket
 from dataclasses import asdict, dataclass, field
+from datetime import UTC, datetime
 from uuid import uuid4
-from app.api.utils import now_iso
-
 
 SCHEMA_VERSION = 1
 PRODUCER = socket.gethostname()
@@ -17,7 +16,7 @@ class Envelope:
     schema_version: int = SCHEMA_VERSION
     producer: str = PRODUCER
     event_id: str = field(default_factory=lambda: str(uuid4()))
-    timestamp: str = field(default_factory=now_iso)
+    timestamp: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
 
     def to_json(self) -> str:
         return json.dumps(asdict(self))

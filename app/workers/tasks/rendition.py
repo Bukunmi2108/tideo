@@ -155,10 +155,10 @@ def rendition(self, job_id: str, preset_name: str, src: str, meta: dict) -> dict
         return {"status": "cancelled", "job_id": job_id}
     m = SourceMeta(**meta)
     preset = PRESETS[preset_name]
-    log.info("rendition_started", preset=preset_name)
-    emit(RENDITION_STARTED, job_id, {"preset": preset_name})
     if not _mark_started(job_id):
         return {"status": "cancelled", "job_id": job_id}
+    log.info("rendition_started", preset=preset_name)
+    emit(RENDITION_STARTED, job_id, {"preset": preset_name})
     throttle = Throttle()
     final = paths.output_dir(job_id) / preset_name
     started = time.monotonic()

@@ -32,10 +32,32 @@ def publish(env: Envelope) -> None:
     p.produce(TOPIC, key=env.job_id, value=env.to_json(), on_delivery=_on_delivery)
     p.poll(0)   # serve delivery callbacks without blocking
 
-def flush_producer(timeout: float = 5) -> None:
+
+def publish_confirmed(env: Envelope, timeout: float = 5) -> None:
+    """Publish one command-triggering event and surface timeout or broker rejection to its outbox."""
+    errors = []
+
+    def delivered(err, _msg):
+        if err is not None:
+            errors.append(err)
+
+    p = get_producer()
+    p.produce(TOPIC, key=env.job_id, value=env.to_json(), on_delivery=delivered)
+    remaining = p.flush(timeout)
+    if remaining:
+        raise TimeoutError(f"{remaining} Kafka event(s) undelivered after {timeout}s")
+    if errors:
+        raise RuntimeError(f"Kafka delivery failed: {errors[0]}")
+
+
+def flush_producer(timeout: float = 5) -> int:
     """Block until buffered events are delivered. Call on process shutdown (worker + API)."""
-    if _producer is not None:
-        _producer.flush(timeout)
+    if _producer is None:
+        return 0
+    remaining = _producer.flush(timeout)
+    if remaining:
+        log.error("kafka_flush_incomplete", undelivered=remaining)
+    return remaining
 
 def emit(event_type: str, job_id: str, payload: dict) -> bool:
     """Publish an event without interrupting the caller on failure."""

@@ -1,7 +1,8 @@
 import signal
+import time
 
 import psycopg2
-from confluent_kafka import Consumer
+from confluent_kafka import Consumer, TopicPartition
 from psycopg2.extras import Json
 
 from app.core.config import config
@@ -76,11 +77,28 @@ def store_event(conn, env: dict) -> str:
         return "poison"
 
 
+def _connect():
+    conn = psycopg2.connect(config.postgres_dsn)
+    ensure_schema(conn)
+    return conn
+
+
+def _reconnect():
+    while _running:
+        time.sleep(2)
+        if not _running:
+            break
+        try:
+            return _connect()
+        except _TRANSIENT:
+            log.error("postgres_reconnect_failed")
+    return None
+
+
 def run():
     signal.signal(signal.SIGTERM, _stop)
     signal.signal(signal.SIGINT, _stop)
-    conn = psycopg2.connect(config.postgres_dsn)
-    ensure_schema(conn)
+    conn = _connect()
     consumer = Consumer({
         "bootstrap.servers": config.kafka_bootstrap,
         "group.id": "audit", 
@@ -111,6 +129,12 @@ def run():
                 result = store_event(conn, env)
             except _TRANSIENT:
                 log.error("postgres_unavailable", partition=msg.partition(), offset=msg.offset())
+                consumer.seek(TopicPartition(msg.topic(), msg.partition(), msg.offset()))  # type: ignore[arg-type]
+                conn.close()
+                replacement = _reconnect()
+                if replacement is None:
+                    break
+                conn = replacement
                 continue
             if result == "poison":
                 poison += 1

@@ -6,6 +6,8 @@ from app.dispatcher.guard import claim
 from app.dispatcher.handler import BadEvent, parse_event, process
 from app.events.topics import JOB_CREATED
 
+EVENT_ID = "00000000-0000-4000-8000-000000000001"
+
 
 class FakeRedis:
     def __init__(self):
@@ -44,7 +46,15 @@ def test_release_makes_event_claimable_again(monkeypatch):
 
 
 def _env(**kw):
-    base = {"event_id": "e1", "event_type": JOB_CREATED, "job_id": "j1"}
+    base = {
+        "event_id": EVENT_ID,
+        "event_type": JOB_CREATED,
+        "job_id": "j1",
+        "timestamp": "2026-08-02T10:00:00+00:00",
+        "producer": "test",
+        "schema_version": 1,
+        "payload": {"presets": ["720p"], "subtitles": False, "source_duration": 30.0},
+    }
     base.update(kw)
     return base
 
@@ -62,7 +72,7 @@ def test_parse_rejects_garbage(raw):
         parse_event(raw)
 
 
-@pytest.mark.parametrize("event_id", [None, "", " ", 1])
+@pytest.mark.parametrize("event_id", [None, "", " ", "not-a-uuid", 1])
 def test_parse_rejects_invalid_required_field(event_id):
     raw = json.dumps(_env(event_id=event_id)).encode()
     with pytest.raises(BadEvent):
@@ -73,6 +83,23 @@ def test_parse_rejects_missing_required_field():
     raw = json.dumps({"event_type": JOB_CREATED, "job_id": "j1"}).encode()
     with pytest.raises(BadEvent):
         parse_event(raw)
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"schema_version": 2},
+        {"payload": None},
+        {"payload": {}},
+        {"payload": {"presets": [], "subtitles": False, "source_duration": 30.0}},
+        {"payload": {"presets": ["720p", 1], "subtitles": False, "source_duration": 30.0}},
+        {"payload": {"presets": ["720p"], "subtitles": "false", "source_duration": 30.0}},
+        {"payload": {"presets": ["720p"], "subtitles": False, "source_duration": "30"}},
+    ],
+)
+def test_parse_rejects_unsupported_or_invalid_job_created(overrides):
+    with pytest.raises(BadEvent):
+        parse_event(json.dumps(_env(**overrides)).encode())
 
 
 def test_process_dispatches_new_job_created():
@@ -140,4 +167,4 @@ def test_process_releases_claim_when_enqueue_fails():
             enqueue=enqueue_boom,
             release=lambda _id: released.append(_id),
         )
-    assert released == ["e1"]
+    assert released == [EVENT_ID]
