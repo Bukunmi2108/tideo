@@ -7,7 +7,8 @@ from celery.utils import uuid
 
 from app.core.config import config
 from app.core.logging import bind_job, get_logger
-from app.domain.errors import ENCODE_FAILED_TRANSIENT
+from app.domain.errors import ENCODE_FAILED_TRANSIENT, TRANSCODE
+from app.domain.errors import PACKAGE as PACKAGE_STAGE
 from app.events.producer import emit
 from app.events.topics import JOB_FAILED
 from app.storage.db import persist_terminal
@@ -112,15 +113,17 @@ def fail_job(request, exc, traceback, job_id: str):
     """Handle a hard chord failure."""
     bind_job(job_id)
     r = get_sync_client()
+    fallback_stage = PACKAGE_STAGE if getattr(request, "task", None) == PACKAGE else TRANSCODE
+    fallback_message = "package failed" if fallback_stage == PACKAGE_STAGE else "transcoding failed"
     nxt = transition_status(r, job_id, "failed", caller="chord-fail", extra={
         "error_code": cast(str, r.hget(f"job:{job_id}", "error_code")) or ENCODE_FAILED_TRANSIENT,
-        "error_message": cast(str, r.hget(f"job:{job_id}", "error_message")) or "transcoding failed",
-        "error_stage": cast(str, r.hget(f"job:{job_id}", "error_stage")) or "transcode",
+        "error_message": cast(str, r.hget(f"job:{job_id}", "error_message")) or fallback_message,
+        "error_stage": cast(str, r.hget(f"job:{job_id}", "error_stage")) or fallback_stage,
     })
     if nxt:                                                   # None -> already terminal, drop
         code = cast(str, r.hget(f"job:{job_id}", "error_code")) or ENCODE_FAILED_TRANSIENT
-        msg = cast(str, r.hget(f"job:{job_id}", "error_message")) or "transcoding failed"
-        stage = cast(str, r.hget(f"job:{job_id}", "error_stage")) or "transcode"
+        msg = cast(str, r.hget(f"job:{job_id}", "error_message")) or fallback_message
+        stage = cast(str, r.hget(f"job:{job_id}", "error_stage")) or fallback_stage
         r.expire(f"job:{job_id}", config.output_ttl_days * 86400)
         persist_terminal(job_id, r.hgetall(f"job:{job_id}"))
         emit(JOB_FAILED, job_id, {"error_code": code, "stage": stage})

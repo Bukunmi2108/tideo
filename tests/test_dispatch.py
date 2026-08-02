@@ -1,4 +1,5 @@
 import json
+from types import SimpleNamespace
 
 from app.dispatcher import dispatch
 from app.storage.job_control import DispatchReservation
@@ -243,6 +244,28 @@ def test_fail_job_marks_failed_and_revokes_siblings(monkeypatch):
     assert fake.hashes["job:j1"]["error_code"] == "ENCODE_FAILED_TRANSIENT"  # no rendition error stored -> default
     dlq_rec = json.loads(fake.hashes["dlq"]["j1"])                           # final failure lands in the DLQ
     assert dlq_rec["error_code"] == "ENCODE_FAILED_TRANSIENT" and dlq_rec["job_id"] == "j1"
+
+
+def test_fail_job_uses_package_stage_for_callback_failure(monkeypatch):
+    fake = FakeRedis({"status": "transcoding", "rendition_ids": "[]"})
+    monkeypatch.setattr(dispatch, "get_sync_client", lambda: fake)
+    emitted, persisted = [], []
+    monkeypatch.setattr(dispatch, "emit", lambda et, jid, payload: emitted.append((et, jid, payload)))
+    monkeypatch.setattr(dispatch, "persist_terminal", lambda jid, rec, **_k: persisted.append((jid, rec)))
+    monkeypatch.setattr(dispatch.celery_app.control, "revoke", lambda *_a, **_k: None)
+    request = SimpleNamespace(id="cb-1", task=dispatch.PACKAGE, args=["j1"], retries=0)
+
+    dispatch.fail_job(request, None, None, "j1")
+
+    rec = fake.hashes["job:j1"]
+    assert rec["error_code"] == "ENCODE_FAILED_TRANSIENT"
+    assert rec["error_message"] == "package failed"
+    assert rec["error_stage"] == "package"
+    assert persisted[0][1]["error_stage"] == "package"
+    assert emitted == [("job.failed", "j1", {"error_code": "ENCODE_FAILED_TRANSIENT", "stage": "package"})]
+    dlq_rec = json.loads(fake.hashes["dlq"]["cb-1"])
+    assert dlq_rec["task"] == dispatch.PACKAGE
+    assert dlq_rec["error_stage"] == "package"
 
 
 def test_fail_job_preserves_classified_error_from_rendition(monkeypatch):
