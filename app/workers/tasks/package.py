@@ -37,7 +37,7 @@ def _probe_variant(seg_path: str) -> dict:
 
 
 def _variant(job_dir: str, preset: str, output_bytes: int, duration: float) -> Variant:
-    s = _probe_variant(f"{job_dir}/{preset}/seg_00000.ts")     # actual encoded dims + profile/level
+    s = _probe_variant(f"{job_dir}/{preset}/seg_00000.ts")
     codecs = f"{avc1_codec(s['profile'], int(s['level']))},mp4a.40.2"
     return Variant(preset, bandwidth(output_bytes, duration), int(s["width"]), int(s["height"]), codecs)
 
@@ -69,7 +69,6 @@ def _web_mp4(src: str, out: str, *, web_safe: bool, top: str) -> bool:
 
 @app.task(base=PackageTask)
 def package(results, job_id: str) -> dict:
-    """Package successful renditions."""
     bind_job(job_id)
     results = results if isinstance(results, list) else [results]
     r = get_sync_client()
@@ -86,7 +85,7 @@ def package(results, job_id: str) -> dict:
     if is_cancelled(job_id):
         return _cancel_package(r, job_id, job_dir)
 
-    renditions = [res for res in results if "preset" in res]   # thumbs result has no "preset"
+    renditions = [res for res in results if "preset" in res]
     variants = [_variant(str(job_dir), res["preset"], res["output_bytes"], duration) for res in renditions]
 
     top = _highest([v.preset for v in variants])
@@ -121,10 +120,7 @@ def package(results, job_id: str) -> dict:
         '<script>var h=new Hls({debug:true});h.loadSource("playlist");h.attachMedia(document.getElementById("v"));</script>'
     )
 
-    # terminal: done + results refs + job.completed + durable Postgres row.
-    nxt = transition_status(r, job_id, "done", caller="package", extra={
-        "results": json.dumps({"master": "master.m3u8", "web_mp4": "web.mp4", "manifest": "manifest.json"}),
-    })
+    nxt = transition_status(r, job_id, "done", caller="package")
     if nxt:
         r.expire(f"job:{job_id}", config.output_ttl_days * 86400)   # hot state yields to Postgres after the window
         persist_terminal(job_id, r.hgetall(f"job:{job_id}"), results=results)

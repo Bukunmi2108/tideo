@@ -1,11 +1,10 @@
 from dataclasses import dataclass
 
-# H.264 profile name -> profile_idc hex. CODECS = avc1.<idc><constraints><level-hex>.
 _PROFILE_IDC = {"Baseline": "42", "Constrained Baseline": "42", "Main": "4d", "High": "64"}
 
 def avc1_codec(profile: str, level: int) -> str:
-    idc = _PROFILE_IDC.get(profile, "4d")            # default Main if unknown
-    return f"avc1.{idc}00{level:02x}"                # e.g. High, level 31 -> avc1.64001f
+    idc = _PROFILE_IDC.get(profile, "4d")
+    return f"avc1.{idc}00{level:02x}"
 
 def bandwidth(output_bytes: int, duration: float) -> int:
     """Measured bitrate (bits/s) from actual output, padded ~10% for peak. NOT the configured target."""
@@ -58,8 +57,7 @@ def build_subtitle_media_playlist(duration: float) -> str:
 
 def build_manifest(job_id: str, duration: float, variants: list[Variant],
                    *, web_remuxed: bool, created_at: str | None, storyboard: dict | None = None) -> dict:
-    """Machine-readable result summary. Schema is a contract: the API `done` response, the frontend,
-    and dedupe's lazy-verify all read it. Pure -> assertable."""
+    """Build the public manifest; late subtitle completion also reads its rendition metadata."""
     return {
         "job_id": job_id,
         "duration": duration,
