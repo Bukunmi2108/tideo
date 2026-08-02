@@ -11,7 +11,7 @@ from app.domain.errors import ENCODE_FAILED_TRANSIENT, TRANSCODE
 from app.domain.errors import PACKAGE as PACKAGE_STAGE
 from app.events.producer import emit
 from app.events.topics import JOB_FAILED
-from app.storage.db import persist_terminal
+from app.storage import terminal_outbox
 from app.storage.job_control import (
     DispatchPlan,
     reserve_dispatch,
@@ -124,8 +124,7 @@ def fail_job(request, exc, traceback, job_id: str):
         code = cast(str, r.hget(f"job:{job_id}", "error_code")) or ENCODE_FAILED_TRANSIENT
         msg = cast(str, r.hget(f"job:{job_id}", "error_message")) or fallback_message
         stage = cast(str, r.hget(f"job:{job_id}", "error_stage")) or fallback_stage
-        r.expire(f"job:{job_id}", config.output_ttl_days * 86400)
-        persist_terminal(job_id, r.hgetall(f"job:{job_id}"))
+        terminal_outbox.drain_one(r, job_id)
         emit(JOB_FAILED, job_id, {"error_code": code, "stage": stage})
         r.publish(f"progress:{job_id}", json.dumps({"event": "terminal"}))  # wake a live WS relay
         dlq.add(r, {

@@ -160,7 +160,7 @@ def rendition(self, job_id: str, preset_name: str, src: str, meta: dict) -> dict
     log.info("rendition_started", preset=preset_name)
     emit(RENDITION_STARTED, job_id, {"preset": preset_name})
     throttle = Throttle()
-    final = paths.output_dir(job_id) / preset_name
+    final = paths.ensure_output_dir(job_id) / preset_name
     started = time.monotonic()
     try:
         with paths.atomic_dir(final) as tmp:

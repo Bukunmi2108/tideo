@@ -13,8 +13,7 @@ from app.domain.playlist import Variant, avc1_codec, bandwidth, build_manifest
 from app.domain.state import TERMINAL
 from app.events.producer import emit
 from app.events.topics import JOB_COMPLETED
-from app.storage import paths
-from app.storage.db import persist_terminal
+from app.storage import paths, terminal_outbox
 from app.storage.job_control import transition_status
 from app.storage.state import get_sync_client
 from app.workers.base import PackageTask
@@ -80,7 +79,7 @@ def package(results, job_id: str) -> dict:
     rec = r.hgetall(f"job:{job_id}")
     meta = json.loads(rec["source_meta"])
     duration = meta["duration"]
-    job_dir = paths.output_dir(job_id)
+    job_dir = paths.ensure_output_dir(job_id)
 
     if is_cancelled(job_id):
         return _cancel_package(r, job_id, job_dir)
@@ -120,10 +119,15 @@ def package(results, job_id: str) -> dict:
         '<script>var h=new Hls({debug:true});h.loadSource("playlist");h.attachMedia(document.getElementById("v"));</script>'
     )
 
-    nxt = transition_status(r, job_id, "done", caller="package")
+    nxt = transition_status(
+        r,
+        job_id,
+        "done",
+        caller="package",
+        extra={"rendition_results": json.dumps(results)},
+    )
     if nxt:
-        r.expire(f"job:{job_id}", config.output_ttl_days * 86400)   # hot state yields to Postgres after the window
-        persist_terminal(job_id, r.hgetall(f"job:{job_id}"), results=results)
+        terminal_outbox.drain_one(r, job_id)
         release_source(r, job_id, "package")   # reclaim the upload once transcribe is also done with it
         emit(JOB_COMPLETED, job_id, {
             "renditions": len(variants),

@@ -38,6 +38,10 @@ app.conf.update(
     result_expires=86400,
 
     beat_schedule={
+        "terminal-projection-drain": {
+            "task": "app.workers.tasks.cleanup.drain_terminal",
+            "schedule": 60.0,
+        },
         "expiry-sweep": {
             "task": "app.workers.tasks.cleanup.sweep",
             "schedule": float(config.cleanup_interval_seconds),

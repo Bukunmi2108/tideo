@@ -1,9 +1,10 @@
 import json
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Literal, cast
 
-from app.domain.state import ACTIVE, transition
-from app.storage.state import EVENT_OUTBOX
+from app.domain.state import ACTIVE, TERMINAL, transition
+from app.storage.state import ACTIVE_DEADLINES, EVENT_OUTBOX, TERMINAL_OUTBOX
 
 _TRANSITION = """
 local current = redis.call('HGET', KEYS[1], 'status')
@@ -12,7 +13,7 @@ if current ~= ARGV[1] then
 end
 
 redis.call('HSET', KEYS[1], 'status', ARGV[2])
-for i = 5, #ARGV, 2 do
+for i = 7, #ARGV, 2 do
     redis.call('HSET', KEYS[1], ARGV[i], ARGV[i + 1])
 end
 if ARGV[3] == '1' then
@@ -20,6 +21,10 @@ if ARGV[3] == '1' then
 end
 if ARGV[4] == '1' then
     redis.call('HINCRBY', KEYS[2], ARGV[2], 1)
+end
+if ARGV[6] == '1' then
+    redis.call('SADD', KEYS[3], ARGV[5])
+    redis.call('ZREM', KEYS[4], ARGV[5])
 end
 return {1, ARGV[2]}
 """
@@ -82,10 +87,11 @@ if status ~= 'queued' and status ~= 'transcoding' then
     return {'wrong_state', status}
 end
 
-redis.call('HSET', KEYS[1], 'status', 'cancelled')
+redis.call('HSET', KEYS[1], 'status', 'cancelled', 'finished_at', ARGV[3])
 redis.call('HINCRBY', KEYS[2], status, -1)
 redis.call('SET', KEYS[3], '1', 'EX', ARGV[1])
-redis.call('EXPIRE', KEYS[1], ARGV[1])
+redis.call('SADD', KEYS[4], ARGV[2])
+redis.call('ZREM', KEYS[5], ARGV[2])
 return {
     'cancelled',
     status,
@@ -109,13 +115,18 @@ def _extra_args(extra: dict | None) -> list[str]:
     return args
 
 
-def _transition_args(current: str, target: str, extra: dict | None) -> list[str]:
+def _transition_args(current: str, target: str, job_id: str, extra: dict | None) -> list[str]:
+    fields = dict(extra or {})
+    if target in TERMINAL:
+        fields.setdefault("finished_at", datetime.now(UTC).isoformat())
     return [
         current,
         target,
         "1" if current in ACTIVE else "0",
         "1" if target in ACTIVE else "0",
-        *_extra_args(extra),
+        job_id,
+        "1" if target in TERMINAL else "0",
+        *_extra_args(fields),
     ]
 
 
@@ -128,10 +139,12 @@ def transition_status(r, job_id: str, target: str, *, caller: str, extra: dict |
             return None
         result = r.eval(
             _TRANSITION,
-            2,
+            4,
             f"job:{job_id}",
             "stats:active",
-            *_transition_args(current, target, extra),
+            TERMINAL_OUTBOX,
+            ACTIVE_DEADLINES,
+            *_transition_args(current, target, job_id, extra),
         )
         if int(result[0]) == 1:
             return target
@@ -154,10 +167,12 @@ async def atransition_status(
             return None
         result = await r.eval(
             _TRANSITION,
-            2,
+            4,
             f"job:{job_id}",
             "stats:active",
-            *_transition_args(expected, target, extra),
+            TERMINAL_OUTBOX,
+            ACTIVE_DEADLINES,
+            *_transition_args(expected, target, job_id, extra),
         )
         return target if int(result[0]) == 1 else None
     for _ in range(8):
@@ -167,10 +182,12 @@ async def atransition_status(
             return None
         result = await r.eval(
             _TRANSITION,
-            2,
+            4,
             f"job:{job_id}",
             "stats:active",
-            *_transition_args(current, target, extra),
+            TERMINAL_OUTBOX,
+            ACTIVE_DEADLINES,
+            *_transition_args(current, target, job_id, extra),
         )
         if int(result[0]) == 1:
             return target
@@ -260,11 +277,15 @@ class CancelResult:
 async def acancel_job(r, job_id: str, *, ttl: int) -> CancelResult:
     raw = await r.eval(
         _CANCEL_JOB,
-        3,
+        5,
         f"job:{job_id}",
         "stats:active",
         f"cancel:{job_id}",
+        TERMINAL_OUTBOX,
+        ACTIVE_DEADLINES,
         ttl,
+        job_id,
+        datetime.now(UTC).isoformat(),
     )
     outcome = _text(raw[0])
     if outcome not in ("cancelled", "wrong_state", "missing"):

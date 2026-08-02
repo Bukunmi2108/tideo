@@ -23,9 +23,9 @@ from app.domain.state import TERMINAL
 from app.events.envelope import Envelope
 from app.events.producer import emit
 from app.events.topics import JOB_CANCELLED, JOB_CREATED
+from app.storage import terminal_outbox
 from app.storage.db import get_job as db_get_job
 from app.storage.db import list_jobs as db_list_jobs
-from app.storage.db import persist_terminal
 from app.storage.job_control import acancel_job, aqueue_job
 from app.storage.pressure import under_pressure
 from app.storage.state import get_client
@@ -152,7 +152,7 @@ async def transcode(job_id: str, body: TranscodeRequest):
     if not body.presets or bad:
         raise ApiError(422, "PRESET_NOT_RECOMMENDED",
                        f"presets not in recommendation: {bad or body.presets}", job_id=job_id)
-    if under_pressure():
+    if await run_in_threadpool(under_pressure):
         raise StoragePressure(job_id)
 
     duration = json.loads(rec["source_meta"]).get("duration")
@@ -197,8 +197,7 @@ async def cancel(job_id: str):
                        f"job is {result.previous_status}, not cancellable", job_id=job_id)
 
     try:
-        rec = await r.hgetall(f"job:{job_id}")
-        await run_in_threadpool(persist_terminal, job_id, rec)
+        await terminal_outbox.adrain_one(r, job_id)
     except Exception:
         log.exception("cancel_persist_failed")
 

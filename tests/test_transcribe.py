@@ -80,7 +80,14 @@ def harness(tmp_path, monkeypatch):
     monkeypatch.setattr(T, "acquire", lambda *a, **k: Allowed())
     monkeypatch.setattr(T, "extract_audio", lambda src, out: None)
     monkeypatch.setattr(T, "attach_subtitles", lambda jid, dur: True)
-    monkeypatch.setattr(T, "update_subtitles", lambda jid, payload: status_writes.append(payload))
+
+    def store_status(r, job_id, payload):
+        status_writes.append(payload)
+        r.hset(f"job:{job_id}", "subtitles", payload)
+        return r.h.get(f"job:{job_id}", {}).get("status", "")
+
+    monkeypatch.setattr(T.terminal_outbox, "store_subtitles", store_status)
+    monkeypatch.setattr(T.terminal_outbox, "drain_one", lambda *_a, **_k: True)
     monkeypatch.setattr(T.paths, "output_dir", lambda jid: tmp_path)
     monkeypatch.setattr(T.transcribe, "retry",
                         lambda *a, countdown=None, **k: (_ for _ in ()).throw(_Retry(countdown)))

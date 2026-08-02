@@ -1,7 +1,7 @@
-"""Real-Postgres tests for the ON CONFLICT idempotency/precedence semantics — the one contract a
-FakeConn cannot model (conflict resolution lives in the engine). Skips when no DB is reachable, so
-it runs against the local dev stack and is a no-op in a DB-less CI. Mirrors the manual drill in
-docs/phases (done insert / redelivered no-op / done->expired update)."""
+"""Real-Postgres tests for terminal projection conflict semantics."""
+import json
+from datetime import UTC, datetime
+
 import psycopg2
 import pytest
 
@@ -59,24 +59,14 @@ def test_redelivered_terminal_is_a_noop(conn):
     assert len(rows) == 1 and rows[0][0] == "done"
 
 
-def test_done_to_expired_updates_and_sets_expired_at(conn):
+def test_same_terminal_redelivery_patches_subtitles_without_changing_status(conn):
     write_terminal(conn, job_row("it_2", _rec("done"), finished_at="2026-06-17T10:01:00+00:00"), [])
-    write_terminal(conn, job_row("it_2", _rec("expired"), finished_at="2026-06-17T10:01:00+00:00",
-                                 expired_at="2026-06-24T00:00:00+00:00"), [])
-    rows = _status_and_count(conn, "it_2")
-    assert len(rows) == 1 and rows[0][0] == "expired" and rows[0][1] is not None
-
-
-def test_expiry_redelivery_is_a_noop(conn):
-    write_terminal(conn, job_row("it_3", _rec("done"), finished_at="2026-06-17T10:01:00+00:00"), [])
-    write_terminal(conn, job_row("it_3", _rec("expired"), finished_at="2026-06-17T10:01:00+00:00",
-                                 expired_at="2026-06-24T00:00:00+00:00"), [])
-    write_terminal(conn, job_row("it_3", _rec("expired"), finished_at="2026-06-17T10:01:00+00:00",
-                                 expired_at="2026-06-30T00:00:00+00:00"), [])   # second expiry: no-op
+    rec = {**_rec("done"), "subtitles": json.dumps({"status": "ready"})}
+    write_terminal(conn, job_row("it_2", rec, finished_at="2026-06-17T11:00:00+00:00"), [])
     with conn.cursor() as cur:
-        cur.execute("SELECT expired_at FROM jobs WHERE job_id=%s", ("it_3",))
-        expired_at = cur.fetchone()[0]
-    assert expired_at.isoformat().startswith("2026-06-24")   # first expiry stuck, not overwritten
+        cur.execute("SELECT status, subtitles FROM jobs WHERE job_id=%s", ("it_2",))
+        status, subtitles = cur.fetchone()
+    assert status == "done" and subtitles == {"status": "ready"}
 
 
 def test_count_by_status_groups_terminal_rows(conn):
@@ -90,13 +80,13 @@ def test_count_by_status_groups_terminal_rows(conn):
 
 def test_list_expirable_and_mark_expired_round_trip(conn):
     from app.storage.db import list_expirable, mark_expired
-    from datetime import datetime, timezone
+
     old = "2026-06-01T10:00:00+00:00"        # well before any plausible cutoff
     write_terminal(conn, job_row("it_exp", _rec("done"), finished_at=old), [])
-    cutoff = datetime(2026, 6, 10, tzinfo=timezone.utc)
+    cutoff = datetime(2026, 6, 10, tzinfo=UTC)
     ids = [r["job_id"] for r in list_expirable(cutoff)]
     assert "it_exp" in ids
-    now = datetime(2026, 6, 17, tzinfo=timezone.utc)
+    now = datetime(2026, 6, 17, tzinfo=UTC)
     assert mark_expired("it_exp", now) is True      # won the done->expired transition
     assert mark_expired("it_exp", now) is False     # idempotent: already expired, no re-transition
     assert "it_exp" not in [r["job_id"] for r in list_expirable(cutoff)]   # no longer eligible

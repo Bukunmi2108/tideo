@@ -1,10 +1,12 @@
 import asyncio
+import json
 from uuid import uuid4
 
 import pytest
 import redis
 import redis.asyncio as aioredis
 
+from app.storage import terminal_outbox
 from app.storage.job_control import (
     DispatchPlan,
     acancel_job,
@@ -12,7 +14,7 @@ from app.storage.job_control import (
     reserve_dispatch,
     transition_status,
 )
-from app.storage.state import EVENT_OUTBOX
+from app.storage.state import ACTIVE_DEADLINES, EVENT_OUTBOX, TERMINAL_OUTBOX
 
 
 def _client():
@@ -31,6 +33,8 @@ def redis_job():
     r.delete(*keys)
     yield r, job_id
     r.delete(*keys)
+    r.srem(TERMINAL_OUTBOX, job_id)
+    r.zrem(ACTIVE_DEADLINES, job_id)
     r.close()
 
 
@@ -88,6 +92,7 @@ def test_reserved_ids_and_cancel_transition_are_one_atomic_protocol(redis_job):
     r, job_id = redis_job
     r.hset(f"job:{job_id}", mapping={"status": "queued"})
     r.hset("stats:active", "queued", 1)
+    r.zadd(ACTIVE_DEADLINES, {job_id: 9999999999})
     plan = DispatchPlan("evt", ("r0", "r1"), "cb", "stt")
 
     reservation = reserve_dispatch(r, job_id, plan)
@@ -98,6 +103,9 @@ def test_reserved_ids_and_cancel_transition_are_one_atomic_protocol(redis_job):
     assert r.hget(f"job:{job_id}", "status") == "cancelled"
     assert r.get(f"cancel:{job_id}") == "1"
     assert int(r.hget("stats:active", "queued")) == 0
+    assert r.sismember(TERMINAL_OUTBOX, job_id)
+    assert r.zscore(ACTIVE_DEADLINES, job_id) is None
+    assert r.ttl(f"job:{job_id}") == -1
 
 
 def test_cancel_winning_first_prevents_dispatch_reservation(redis_job):
@@ -121,3 +129,16 @@ def test_late_package_transition_cannot_overwrite_cancelled(redis_job):
     assert _cancel(job_id).outcome == "cancelled"
     assert transition_status(r, job_id, "done", caller="late-package") is None
     assert r.hget(f"job:{job_id}", "status") == "cancelled"
+
+
+def test_subtitles_written_after_terminal_requeue_projection(redis_job):
+    r, job_id = redis_job
+    r.hset(f"job:{job_id}", mapping={"status": "done"})
+    r.srem(TERMINAL_OUTBOX, job_id)
+    payload = {"status": "ready", "url": f"/jobs/{job_id}/subtitles"}
+
+    status = terminal_outbox.store_subtitles(r, job_id, payload)
+
+    assert status == "done"
+    assert json.loads(r.hget(f"job:{job_id}", "subtitles")) == payload
+    assert r.sismember(TERMINAL_OUTBOX, job_id)

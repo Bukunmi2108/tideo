@@ -1,4 +1,3 @@
-import json
 from typing import cast
 
 from celery.exceptions import Retry
@@ -8,9 +7,9 @@ from app.core.config import config
 from app.core.logging import bind_job, get_logger
 from app.core.ratelimit import RetryIn, acquire
 from app.domain.errors import STT_BAD_AUDIO, STT_INTERNAL
+from app.domain.state import TERMINAL
 from app.domain.vtt import render_vtt
-from app.storage import paths
-from app.storage.db import update_subtitles
+from app.storage import paths, terminal_outbox
 from app.storage.state import get_sync_client
 from app.workers.audio import extract_audio, has_audio
 from app.workers.base import TranscribeTask
@@ -31,10 +30,12 @@ def _set_status(job_id: str, payload: dict) -> None:
     """Store subtitle status and release its source claim."""
     r = get_sync_client()
     try:
-        r.hset(f"job:{job_id}", "subtitles", json.dumps(payload))
+        status = terminal_outbox.store_subtitles(r, job_id, payload)
     except (RedisError, OSError):
         log.warning("subtitles_hot_write_failed")
-    update_subtitles(job_id, payload)
+    else:
+        if status in TERMINAL:
+            terminal_outbox.drain_one(r, job_id)
     try:
         release_source(r, job_id, "transcribe")
     except (RedisError, OSError):
@@ -74,7 +75,7 @@ def _run(task, job_id: str, src: str, meta: dict) -> dict:
         _set_status(job_id, {"status": "none", "reason": "no audio stream"})
         return {"status": "none"}
 
-    job_dir = paths.output_dir(job_id)
+    job_dir = paths.ensure_output_dir(job_id)
     wav = job_dir / "audio.wav"
     try:
         extract_audio(src, str(wav))

@@ -28,7 +28,7 @@ def client(monkeypatch, tmp_path):
 
     monkeypatch.setattr(up.dedupe, "resolve_upload", resolve, raising=False)
     monkeypatch.setattr(up, "atransition_status", transition, raising=False)
-    monkeypatch.setattr(up, "persist_terminal", MagicMock(), raising=False)
+    monkeypatch.setattr(up.terminal_outbox, "adrain_one", AsyncMock(return_value=True))
     return TestClient(app, raise_server_exceptions=False), fake_redis, tmp_path
 
 

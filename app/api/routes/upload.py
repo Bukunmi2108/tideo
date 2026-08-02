@@ -17,8 +17,7 @@ from app.api.utils import new_job_id, now_iso
 from app.core.config import config
 from app.core.logging import bind_job, get_logger
 from app.domain.errors import INSPECT, INSPECTION_UNAVAILABLE
-from app.storage import dedupe
-from app.storage.db import persist_terminal
+from app.storage import dedupe, paths, terminal_outbox
 from app.storage.job_control import atransition_status
 from app.storage.pressure import under_pressure
 from app.storage.state import get_client
@@ -78,17 +77,25 @@ async def upload(request: Request, filename: str | None = None):
         raise InvalidUpload("empty upload")
 
     r = get_client()
+    job_fields = {
+        "source_filename": filename,
+        "content_hash": content_hash,
+        "source_path": str(dest),
+        "created_at": now_iso(),
+    }
     resolution = await dedupe.resolve_upload(
         r,
         content_hash,
         job_id,
-        {
-            "source_filename": filename,
-            "content_hash": content_hash,
-            "source_path": str(dest),
-            "created_at": now_iso(),
-        },
+        job_fields,
     )
+    if resolution.status == "done":
+        manifest = paths.output_dir(resolution.job_id) / "manifest.json"
+        if await run_in_threadpool(manifest.is_file):
+            await r.expire(f"content:{content_hash}", config.output_ttl_days * 86400)
+        else:
+            await dedupe.invalidate_done(r, content_hash, resolution.job_id)
+            resolution = await dedupe.resolve_upload(r, content_hash, job_id, job_fields)
     if resolution.outcome == "hit":
         await _cleanup(dest.parent)
         log.info("upload_completed", dedupe="hit", owner=resolution.job_id)
@@ -120,9 +127,7 @@ async def upload(request: Request, filename: str | None = None):
         )
         if failed:
             try:
-                await r.expire(f"job:{job_id}", config.output_ttl_days * 86400)
-                record = await r.hgetall(f"job:{job_id}")
-                await run_in_threadpool(persist_terminal, job_id, record)
+                await terminal_outbox.adrain_one(r, job_id)
             except Exception:
                 log.exception("upload_failure_persist_failed")
             finally:

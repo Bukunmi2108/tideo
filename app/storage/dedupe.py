@@ -1,7 +1,9 @@
+import time
 from dataclasses import dataclass
 from typing import Literal, cast
 
 from app.core.config import config
+from app.storage.state import ACTIVE_DEADLINES
 
 _RESOLVE_UPLOAD = """
 local owner = redis.call('GET', KEYS[1])
@@ -14,12 +16,31 @@ if owner then
 end
 
 redis.call('SET', KEYS[1], ARGV[1], 'EX', ARGV[2])
-for i = 3, #ARGV, 2 do
+for i = 4, #ARGV, 2 do
     redis.call('HSET', KEYS[2], ARGV[i], ARGV[i + 1])
 end
 redis.call('HSET', KEYS[2], 'status', 'inspecting')
 redis.call('HINCRBY', KEYS[3], 'inspecting', 1)
+redis.call('ZADD', KEYS[4], ARGV[3], ARGV[1])
 return {'miss', ARGV[1], 'inspecting'}
+"""
+
+_INVALIDATE_DONE = """
+if redis.call('GET', KEYS[1]) ~= ARGV[1] then
+    return 0
+end
+if redis.call('HGET', KEYS[2], 'status') ~= 'done' then
+    return 0
+end
+redis.call('DEL', KEYS[1])
+return 1
+"""
+
+_RELEASE_OWNER = """
+if redis.call('GET', KEYS[1]) == ARGV[1] then
+    return redis.call('DEL', KEYS[1])
+end
+return 0
 """
 
 UploadOutcome = Literal["hit", "miss"]
@@ -42,15 +63,18 @@ async def resolve_upload(
     job_id: str,
     extra: dict,
 ) -> UploadResolution:
+    ttl = config.output_ttl_days * 86400
     args = [value for item in extra.items() for value in (item[0], str(item[1]))]
     raw = await r.eval(
         _RESOLVE_UPLOAD,
-        3,
+        4,
         f"content:{content_hash}",
         f"job:{job_id}",
         "stats:active",
+        ACTIVE_DEADLINES,
         job_id,
-        config.output_ttl_days * 86400,
+        ttl,
+        time.time() + ttl,
         *args,
     )
     outcome = _text(raw[0])
@@ -61,3 +85,18 @@ async def resolve_upload(
         _text(raw[1]),
         _text(raw[2]),
     )
+
+
+async def invalidate_done(r, content_hash: str, owner: str) -> bool:
+    result = await r.eval(
+        _INVALIDATE_DONE,
+        2,
+        f"content:{content_hash}",
+        f"job:{owner}",
+        owner,
+    )
+    return bool(result)
+
+
+def release_owner(r, content_hash: str, owner: str) -> bool:
+    return bool(r.eval(_RELEASE_OWNER, 1, f"content:{content_hash}", owner))

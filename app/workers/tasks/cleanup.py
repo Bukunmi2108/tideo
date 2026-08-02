@@ -1,16 +1,21 @@
 import shutil
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
+from typing import cast
 
 from app.core.config import config
 from app.core.logging import get_logger
+from app.domain.errors import JOB_STALE, LIFECYCLE
+from app.domain.state import ACTIVE
 from app.events.producer import emit
 from app.events.topics import JOB_EXPIRED
-from app.storage import db
-from app.storage.state import get_sync_client
+from app.storage import db, dedupe, terminal_outbox
+from app.storage.job_control import transition_status
+from app.storage.state import ACTIVE_DEADLINES, get_sync_client
 from app.workers.base import CleanupTask
 from app.workers.celery_app import app
 
 log = get_logger()
+ACTIVE_BATCH_SIZE = 100
 
 
 def _expire_outputs(now: datetime) -> tuple[int, int]:
@@ -28,7 +33,7 @@ def _expire_outputs(now: datetime) -> tuple[int, int]:
             except FileNotFoundError:
                 pass                                     # already gone (idempotent re-run) — proceed to mark
             if row.get("content_hash"):
-                r.delete(f"content:{row['content_hash']}")   # a dedupe key pointing at deleted files is a bug
+                dedupe.release_owner(r, row["content_hash"], job_id)
             r.delete(f"job:{job_id}")                    # drop stale hot state -> reads fall back to PG (expired)
             if db.mark_expired(job_id, now):
                 emit(JOB_EXPIRED, job_id, {})
@@ -55,6 +60,53 @@ def _sweep_stale_sources(now: datetime) -> int:
         except OSError:
             log.warning("source_reclaim_failed", job_id=row["job_id"], scope="sweep")
     return removed
+
+
+def _sweep_stale_active(now: datetime) -> int:
+    r = get_sync_client()
+    due = cast(
+        list[str],
+        r.zrangebyscore(
+            ACTIVE_DEADLINES,
+            "-inf",
+            now.timestamp(),
+            start=0,
+            num=ACTIVE_BATCH_SIZE,
+        ),
+    )
+    failed = 0
+    for job_id in due:
+        rec = r.hgetall(f"job:{job_id}")
+        if not rec or rec.get("status") not in ACTIVE:
+            r.zrem(ACTIVE_DEADLINES, job_id)
+            continue
+        nxt = transition_status(
+            r,
+            job_id,
+            "failed",
+            caller="cleanup",
+            extra={
+                "error_code": JOB_STALE,
+                "error_message": "job exceeded the active retention window",
+                "error_stage": LIFECYCLE,
+            },
+        )
+        if not nxt:
+            continue
+        r.set(f"cancel:{job_id}", "1", ex=config.output_ttl_days * 86400)
+        terminal_outbox.drain_one(r, job_id)
+        content_hash = cast(str | None, rec.get("content_hash"))
+        if content_hash:
+            dedupe.release_owner(r, content_hash, job_id)
+        for path in (config.uploads_dir / job_id, config.output_dir / job_id):
+            try:
+                shutil.rmtree(path)
+            except FileNotFoundError:
+                pass
+            except OSError:
+                log.warning("stale_active_reclaim_failed", job_id=job_id, path=str(path))
+        failed += 1
+    return failed
 
 
 def _sweep_temp_dirs(now: datetime) -> int:
@@ -85,12 +137,19 @@ def _sweep_temp_dirs(now: datetime) -> int:
 
 
 @app.task(base=CleanupTask)
+def drain_terminal() -> dict:
+    projected = terminal_outbox.drain(get_sync_client())
+    return {"projected": projected}
+
+
+@app.task(base=CleanupTask)
 def sweep() -> dict:
-    """Storage lifecycle sweep: expire done outputs past TTL, reclaim failed/cancelled sources, collect
-    orphaned temps. Beat-scheduled and run once at boot (Beat is silent while a sleeping Space is down)."""
-    now = datetime.now(timezone.utc)
+    """Run the recoverable storage lifecycle work, including the boot-time catch-up path."""
+    now = datetime.now(UTC)
     expired, failed = _expire_outputs(now)
-    result = {"expired": expired, "failed": failed,
+    result = {"projected": terminal_outbox.drain(get_sync_client()),
+              "expired": expired, "failed": failed,
+              "stale_active": _sweep_stale_active(now),
               "sources": _sweep_stale_sources(now), "temps": _sweep_temp_dirs(now)}
     log.info("cleanup_sweep_completed", **result)
     return result

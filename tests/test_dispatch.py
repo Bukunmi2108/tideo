@@ -53,12 +53,14 @@ class FakeRedis:
         return True
 
     def eval(self, script, key_count, *args):
-        job_key, _counts, expected, target, _old_active, _new_active, *extra = args
+        job_key, _counts, outbox, _deadlines, expected, target, _old_active, _new_active, job_id, terminal, *extra = args
         rec = self.hashes[job_key]
         if rec.get("status") != expected:
             return [0, rec.get("status", "")]
         rec["status"] = target
         rec.update(dict(zip(extra[::2], extra[1::2], strict=True)))
+        if terminal == "1":
+            self.sadd(outbox, job_id)
         return [1, target]
 
 
@@ -230,7 +232,7 @@ def test_fail_job_marks_failed_and_revokes_siblings(monkeypatch):
     emitted, revoked = [], []
     persisted = []
     monkeypatch.setattr(dispatch, "emit", lambda et, jid, p: emitted.append((et, jid)))
-    monkeypatch.setattr(dispatch, "persist_terminal", lambda jid, rec, **k: persisted.append((jid, k)))
+    monkeypatch.setattr(dispatch.terminal_outbox, "drain_one", lambda r, jid: persisted.append((jid, {})))
     monkeypatch.setattr(dispatch.celery_app.control, "revoke",
                         lambda tid, terminate=False: revoked.append(tid))
 
@@ -251,7 +253,8 @@ def test_fail_job_uses_package_stage_for_callback_failure(monkeypatch):
     monkeypatch.setattr(dispatch, "get_sync_client", lambda: fake)
     emitted, persisted = [], []
     monkeypatch.setattr(dispatch, "emit", lambda et, jid, payload: emitted.append((et, jid, payload)))
-    monkeypatch.setattr(dispatch, "persist_terminal", lambda jid, rec, **_k: persisted.append((jid, rec)))
+    monkeypatch.setattr(dispatch.terminal_outbox, "drain_one",
+                        lambda r, jid: persisted.append((jid, r.hgetall(f"job:{jid}"))))
     monkeypatch.setattr(dispatch.celery_app.control, "revoke", lambda *_a, **_k: None)
     request = SimpleNamespace(id="cb-1", task=dispatch.PACKAGE, args=["j1"], retries=0)
 
@@ -276,7 +279,7 @@ def test_fail_job_preserves_classified_error_from_rendition(monkeypatch):
     monkeypatch.setattr(dispatch, "get_sync_client", lambda: fake)
     codes = []
     monkeypatch.setattr(dispatch, "emit", lambda et, jid, p: codes.append(p.get("error_code")))
-    monkeypatch.setattr(dispatch, "persist_terminal", lambda *a, **k: None)
+    monkeypatch.setattr(dispatch.terminal_outbox, "drain_one", lambda *a, **k: True)
     monkeypatch.setattr(dispatch.celery_app.control, "revoke", lambda *a, **k: None)
 
     dispatch.fail_job(None, None, None, "j1")

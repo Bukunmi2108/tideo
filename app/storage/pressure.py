@@ -21,7 +21,7 @@ def our_usage_bytes() -> int:
             for name in files:
                 try:
                     total += os.lstat(os.path.join(dirpath, name)).st_size
-                except OSError:
+                except FileNotFoundError:
                     pass
     return total
 
@@ -42,6 +42,6 @@ def under_pressure() -> bool:
             _shedding = is_shedding(our_usage_bytes(), free_bytes())
         except OSError:
             log.warning("disk_probe_failed")
-            _shedding = False
+            _shedding = True
         _checked_at = now
     return _shedding

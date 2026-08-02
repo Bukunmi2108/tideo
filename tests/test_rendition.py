@@ -96,7 +96,19 @@ def test_mark_started_records_started_at(monkeypatch):
             return None
 
         def eval(self, script, key_count, *args):
-            job_key, _counts, expected, target, _old_active, _new_active, *extra = args
+            (
+                job_key,
+                _counts,
+                _outbox,
+                _deadlines,
+                expected,
+                target,
+                _old_active,
+                _new_active,
+                _job_id,
+                _terminal,
+                *extra,
+            ) = args
             if self.hashes[job_key]["status"] != expected:
                 return [0, self.hashes[job_key]["status"]]
             self.hashes[job_key].update({"status": target, **dict(zip(extra[::2], extra[1::2], strict=True))})

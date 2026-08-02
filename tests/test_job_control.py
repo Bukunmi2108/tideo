@@ -9,7 +9,7 @@ from app.storage.job_control import (
     reserve_dispatch,
     transition_status,
 )
-from app.storage.state import EVENT_OUTBOX
+from app.storage.state import ACTIVE_DEADLINES, EVENT_OUTBOX, TERMINAL_OUTBOX
 
 
 class FakeRedis:
@@ -31,8 +31,10 @@ def test_transition_status_uses_atomic_compare_and_set():
 
     assert transition_status(r, "j1", "transcoding", caller="test", extra={"started_at": "now"}) == "transcoding"
     _, key_count, args = r.calls[0]
-    assert key_count == 2
-    assert args[:4] == ("job:j1", "stats:active", "queued", "transcoding")
+    assert key_count == 4
+    assert args[:6] == (
+        "job:j1", "stats:active", TERMINAL_OUTBOX, ACTIVE_DEADLINES, "queued", "transcoding"
+    )
     assert args[-2:] == ("started_at", "now")
 
 
@@ -41,6 +43,18 @@ def test_transition_status_drops_late_terminal_without_writing():
 
     assert transition_status(r, "j1", "done", caller="test") is None
     assert r.calls == []
+
+
+def test_terminal_transition_registers_projection_before_returning():
+    r = FakeRedis(status="transcoding", result=[1, "done"])
+
+    assert transition_status(r, "j1", "done", caller="package") == "done"
+
+    _, key_count, args = r.calls[0]
+    assert key_count == 4
+    assert args[:4] == ("job:j1", "stats:active", TERMINAL_OUTBOX, ACTIVE_DEADLINES)
+    assert args[8:10] == ("j1", "1")
+    assert "finished_at" in args
 
 
 def test_expected_async_transition_does_not_follow_an_advanced_job():

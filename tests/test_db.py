@@ -1,8 +1,9 @@
 import json
 
+import pytest
 from psycopg2.extras import Json
 
-import app.storage.db as db
+from app.storage import db
 from app.storage.db import (
     DDL,
     JOBS_UPSERT,
@@ -140,18 +141,12 @@ def test_write_terminal_inserts_job_then_each_rendition_and_commits():
     assert conn.commits == 1
 
 
-def test_jobs_upsert_retains_expiry_precedence_clause():
-    # Guards against silently deleting the WHERE clause. The actual ON CONFLICT *semantics*
-    # (redelivered terminal = no-op; done->expired = update) need a real DB -> test_db_integration.py.
-    assert "EXCLUDED.status = 'expired' AND jobs.status <> 'expired'" in JOBS_UPSERT
+def test_jobs_upsert_only_patches_subtitles_for_same_terminal_status():
+    assert "jobs.status = EXCLUDED.status" in JOBS_UPSERT
+    assert "subtitles = COALESCE" in JOBS_UPSERT
 
 
-def test_job_row_sets_expired_at_when_provided():
-    row = job_row("j1", _done_rec(), finished_at="t", expired_at="2026-06-24T00:00:00+00:00")
-    assert row["expired_at"] == "2026-06-24T00:00:00+00:00"
-
-
-# ---------- persist_terminal: fail-open posture (transient swallowed, bug surfaced, schema self-heals) ----------
+# ---------- persist_terminal: failures surface to the outbox, missing schema self-heals ----------
 
 class _RaisingCursor:
     def __init__(self, conn):
@@ -195,18 +190,20 @@ class _FakeConn:
         pass
 
 
-def test_persist_terminal_swallows_transient_outage(monkeypatch):
+def test_persist_terminal_surfaces_transient_outage(monkeypatch):
     import psycopg2
     monkeypatch.setattr(db.psycopg2, "connect",
                         lambda dsn: (_ for _ in ()).throw(psycopg2.OperationalError("down")))
-    db.persist_terminal("j1", _done_rec())   # must NOT raise — the job already finished
+    with pytest.raises(psycopg2.OperationalError):
+        db.persist_terminal("j1", _done_rec())
 
 
-def test_persist_terminal_swallows_programming_bug(monkeypatch):
+def test_persist_terminal_surfaces_programming_bug(monkeypatch):
     import psycopg2
     conn = _FakeConn(fail_with=psycopg2.ProgrammingError("bad SQL"))   # not UndefinedTable -> no self-heal
     monkeypatch.setattr(db.psycopg2, "connect", lambda dsn: conn)
-    db.persist_terminal("j1", _done_rec())    # logged with a traceback, but must NOT raise
+    with pytest.raises(psycopg2.ProgrammingError):
+        db.persist_terminal("j1", _done_rec())
     assert conn.rolled_back == 1 and conn.executed.count(JOBS_UPSERT) == 1   # failed once, no retry
 
 
@@ -219,66 +216,3 @@ def test_persist_terminal_self_heals_missing_tables(monkeypatch):
     assert conn.healed                        # ensure_schema ran (DDL executed)
     assert conn.rolled_back == 1              # aborted txn rolled back before retry
     assert conn.executed.count(JOBS_UPSERT) == 2   # failed once, retried after creating the schema
-
-
-# ---------- update_subtitles: fail-open patch of the terminal row ----------
-
-class _SubsCursor:
-    def __init__(self, conn):
-        self.conn = conn
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *a):
-        return False
-
-    def execute(self, sql, params=None):
-        self.conn.executed.append((sql, params))
-        if self.conn.fail is not None:
-            raise self.conn.fail
-
-
-class _SubsConn:
-    def __init__(self, fail=None):
-        self.fail = fail
-        self.executed = []
-        self.commits = 0
-        self.rolled_back = 0
-        self.closed = False
-
-    def cursor(self):
-        return _SubsCursor(self)
-
-    def commit(self):
-        self.commits += 1
-
-    def rollback(self):
-        self.rolled_back += 1
-
-    def close(self):
-        self.closed = True
-
-
-def test_update_subtitles_writes_and_commits(monkeypatch):
-    conn = _SubsConn()
-    monkeypatch.setattr(db.psycopg2, "connect", lambda dsn: conn)
-    db.update_subtitles("j1", {"status": "ready", "url": "/jobs/j1/subtitles"})
-    assert conn.commits == 1 and conn.closed
-    sql, params = conn.executed[0]
-    assert "UPDATE jobs SET subtitles" in sql and params[1] == "j1"
-
-
-def test_update_subtitles_swallows_transient_outage(monkeypatch):
-    import psycopg2
-    monkeypatch.setattr(db.psycopg2, "connect",
-                        lambda dsn: (_ for _ in ()).throw(psycopg2.OperationalError("down")))
-    db.update_subtitles("j1", {"status": "ready"})   # fail-open: must NOT raise (job already done)
-
-
-def test_update_subtitles_rolls_back_on_query_error(monkeypatch):
-    import psycopg2
-    conn = _SubsConn(fail=psycopg2.ProgrammingError("bad SQL"))
-    monkeypatch.setattr(db.psycopg2, "connect", lambda dsn: conn)
-    db.update_subtitles("j1", {"status": "failed"})   # logged, swallowed
-    assert conn.rolled_back == 1 and conn.closed

@@ -233,7 +233,12 @@ def test_cancel_transitions_flags_and_revokes(client, monkeypatch, tmp_path, sta
     monkeypatch.setattr(job_route.celery_app.control, "revoke", lambda ids, **k: revoked.append((ids, k)))
     persisted = []
     monkeypatch.setattr(job_route, "emit", lambda event_type, *_a, **_k: published.append(event_type))
-    monkeypatch.setattr(job_route, "persist_terminal", lambda jid, rec, **k: persisted.append(jid))
+
+    async def persist(_r, job_id):
+        persisted.append(job_id)
+        return True
+
+    monkeypatch.setattr(job_route.terminal_outbox, "adrain_one", persist)
     monkeypatch.setattr(job_route, "_remove_cancelled_outputs", lambda jid: None)
 
     r = c.post("/jobs/jc/cancel")

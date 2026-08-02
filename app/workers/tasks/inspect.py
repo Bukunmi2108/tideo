@@ -4,7 +4,7 @@ from dataclasses import asdict
 from app.core.config import config
 from app.core.logging import bind_job, get_logger
 from app.domain import recommend
-from app.storage.db import persist_terminal
+from app.storage import terminal_outbox
 from app.storage.job_control import transition_status
 from app.storage.state import get_sync_client
 from app.workers import ffprobe
@@ -39,7 +39,6 @@ def probe(job_id: str, src: str) -> dict:
         })
         if nxt is None:
             return {"status": "dropped", "job_id": job_id}
-        r.expire(f"job:{job_id}", config.output_ttl_days * 86400)
-        persist_terminal(job_id, r.hgetall(f"job:{job_id}"))
+        terminal_outbox.drain_one(r, job_id)
         log.error("inspect_failed", code=e.code)
         return {"status": "failed", "error": {"code": e.code, "message": e.message}}

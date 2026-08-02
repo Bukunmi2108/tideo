@@ -1,5 +1,5 @@
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import psycopg2
 from psycopg2 import errors as pg_errors
@@ -44,8 +44,7 @@ CREATE TABLE IF NOT EXISTS renditions (
 );
 """
 
-# DO UPDATE only when the incoming write is the expiry of a non-expired row (done -> expired).
-# Every other conflict (a redelivered done/failed/cancelled) is a no-op: terminal states don't regress.
+# Transcription can finish after the job row; only that same-terminal patch may change a redelivery.
 JOBS_UPSERT = """
 INSERT INTO jobs (
     job_id, content_hash, source_filename,
@@ -61,8 +60,8 @@ INSERT INTO jobs (
     %(created_at)s, %(started_at)s, %(finished_at)s, %(expired_at)s, %(subtitles)s
 )
 ON CONFLICT (job_id) DO UPDATE SET
-    status = EXCLUDED.status, expired_at = EXCLUDED.expired_at
-WHERE EXCLUDED.status = 'expired' AND jobs.status <> 'expired'
+    subtitles = COALESCE(EXCLUDED.subtitles, jobs.subtitles)
+WHERE jobs.status = EXCLUDED.status AND EXCLUDED.subtitles IS NOT NULL
 """
 
 RENDITION_UPSERT = """
@@ -81,9 +80,7 @@ def _safe_loads(raw):
         return None
 
 
-def job_row(job_id: str, rec: dict, *, finished_at: str, expired_at: str | None = None) -> dict:
-    """Redis hash -> jobs INSERT params. Pure; tolerates an inspect-failure hash with no source_meta.
-    expired_at is set only by the expiry sweep (done -> expired); all other terminals leave it NULL."""
+def job_row(job_id: str, rec: dict, *, finished_at: str) -> dict:
     sm = _safe_loads(rec.get("source_meta"))
     sm = sm if isinstance(sm, dict) else {}
     return {
@@ -105,7 +102,7 @@ def job_row(job_id: str, rec: dict, *, finished_at: str, expired_at: str | None 
         "created_at": rec.get("created_at"),
         "started_at": rec.get("started_at") or None,
         "finished_at": finished_at,
-        "expired_at": expired_at,
+        "expired_at": None,
         "subtitles": Json(_safe_loads(rec.get("subtitles"))) if rec.get("subtitles") else None,
     }
 
@@ -222,26 +219,6 @@ def mark_expired(job_id: str, expired_at) -> bool:
         conn.close()
 
 
-def update_subtitles(job_id: str, payload: dict) -> None:
-    """Patch the subtitles status on an already-persisted terminal row. Transcription routinely outlives
-    the ladder, so this lands after persist_terminal. Fail-OPEN: a blip must not crash the transcribe
-    task; the hot Redis hash still carries the status within its TTL. No-op if the row isn't written yet."""
-    try:
-        conn = psycopg2.connect(config.postgres_dsn)
-    except _TRANSIENT:
-        log.error("update_subtitles_skipped", reason="postgres_unavailable")
-        return
-    try:
-        with conn.cursor() as cur:
-            cur.execute("UPDATE jobs SET subtitles = %s WHERE job_id = %s", (Json(payload), job_id))
-        conn.commit()
-    except psycopg2.Error:
-        conn.rollback()
-        log.error("update_subtitles_failed", exc_info=True)
-    finally:
-        conn.close()
-
-
 def list_stale_sources(cutoff) -> list:
     """failed/cancelled jobs past the grace window — their source uploads can be reclaimed."""
     conn = psycopg2.connect(config.postgres_dsn)
@@ -254,33 +231,20 @@ def list_stale_sources(cutoff) -> list:
         conn.close()
 
 
-def persist_terminal(job_id: str, rec: dict, *, results=None, expired_at: str | None = None) -> None:
-    """Write the durable terminal row (+ renditions) for a job.
-
-    This is the ONLY store of the full jobs/renditions projection (source metadata, presets, per-rendition
-    metrics); the audit `events` log holds only thin payloads and cannot reconstruct it. Fail-OPEN on a
-    transient outage so a job that already reached its terminal state in Redis/Kafka isn't crashed by a
-    Postgres blip — but that means a transient failure here loses the projection once the Redis hash
-    TTL-expires (a retry outbox is the real fix; deferred). A non-transient error is a bug: logged with a
-    traceback and still swallowed, since the terminal transition has already happened at the call site."""
-    finished_at = datetime.now(timezone.utc).isoformat()
-    params = job_row(job_id, rec, finished_at=finished_at, expired_at=expired_at)
+def persist_terminal(job_id: str, rec: dict, *, results=None) -> None:
+    finished_at = rec.get("finished_at") or datetime.now(UTC).isoformat()
+    params = job_row(job_id, rec, finished_at=finished_at)
     rparams = rendition_rows(job_id, results)
-    conn = None
+    conn = psycopg2.connect(config.postgres_dsn)
     try:
-        conn = psycopg2.connect(config.postgres_dsn)
         try:
             write_terminal(conn, params, rparams)
         except pg_errors.UndefinedTable:
             conn.rollback()
             ensure_schema(conn)
             write_terminal(conn, params, rparams)
-    except _TRANSIENT:
-        log.error("persist_terminal_skipped", status=params["status"], reason="postgres_unavailable")
-    except psycopg2.Error:
-        if conn is not None:
+        except psycopg2.Error:
             conn.rollback()
-        log.error("persist_terminal_failed", status=params["status"], exc_info=True)
+            raise
     finally:
-        if conn is not None:
-            conn.close()
+        conn.close()

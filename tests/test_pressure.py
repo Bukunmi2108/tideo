@@ -1,4 +1,4 @@
-import app.storage.pressure as pressure
+from app.storage import pressure
 
 
 def _force_fresh(monkeypatch):
@@ -52,7 +52,7 @@ def test_under_pressure_caches_between_calls(monkeypatch):
     assert len(calls) == 1
 
 
-def test_under_pressure_fail_open_when_probe_errors(monkeypatch):
+def test_under_pressure_fails_closed_when_probe_errors(monkeypatch):
     _force_fresh(monkeypatch)
 
     def boom():
@@ -60,4 +60,4 @@ def test_under_pressure_fail_open_when_probe_errors(monkeypatch):
 
     monkeypatch.setattr(pressure, "free_bytes", boom)
     monkeypatch.setattr(pressure, "our_usage_bytes", lambda: 0)
-    assert pressure.under_pressure() is False
+    assert pressure.under_pressure() is True

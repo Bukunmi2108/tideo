@@ -1,4 +1,6 @@
 import json
+from concurrent.futures import ThreadPoolExecutor
+from threading import Event
 
 from app.domain.playlist import Variant, build_master, build_subtitle_media_playlist
 from app.workers import subtitles as S
@@ -47,4 +49,28 @@ def test_attach_subtitles_rewrites_master_when_packaged(tmp_path, monkeypatch):
         {"preset": "720p", "bandwidth": 1000, "resolution": "1280x720", "codecs": "avc1.4d401f,mp4a.40.2"}]}))
     (tmp_path / "subtitles.vtt").write_text("WEBVTT\n\n")
     assert S.attach_subtitles("j", 30.0) is True
+    assert 'SUBTITLES="subs"' in (tmp_path / "master.m3u8").read_text()
+
+
+def test_refresh_master_cannot_overwrite_new_subtitles_with_stale_playlist(tmp_path, monkeypatch):
+    original = S.build_master
+    no_subtitles_started = Event()
+    release_no_subtitles = Event()
+
+    def delayed_build(variants, *, has_subtitles=False):
+        if not has_subtitles:
+            no_subtitles_started.set()
+            release_no_subtitles.wait(0.2)
+        return original(variants, has_subtitles=has_subtitles)
+
+    monkeypatch.setattr(S, "build_master", delayed_build)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(S.refresh_master, tmp_path, V, 30.0)
+        assert no_subtitles_started.wait(1)
+        (tmp_path / "subtitles.vtt").write_text("WEBVTT\n\n")
+        second = pool.submit(S.refresh_master, tmp_path, V, 30.0)
+        first.result()
+        second.result()
+
     assert 'SUBTITLES="subs"' in (tmp_path / "master.m3u8").read_text()
