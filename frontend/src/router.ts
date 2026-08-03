@@ -13,11 +13,11 @@ const FALLBACK_META: RouteMeta = {
 const ROUTE_META: Record<string, RouteMeta> = {
   "/": {
     title: "Tideo | Adaptive video, on demand",
-    description: "Turn one source video into an adaptive HLS ladder, encoded in parallel.",
+    description: "Create adaptive HLS, a web-ready MP4, captions, and embeds from one source video.",
   },
   "/upload": {
     title: "Upload | Tideo",
-    description: "Upload a video to inspect it and build an adaptive streaming ladder.",
+    description: "Upload one video to inspect it and choose playback outputs before transcoding starts.",
   },
   "/job": {
     title: "Video job | Tideo",
