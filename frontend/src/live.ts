@@ -173,7 +173,7 @@ export function watch(jobId: string, handlers: WatchHandlers): () => void {
     } catch {
       // network error — keep polling
     }
-    if (!dead && !terminal) schedulePoll();
+    if (!dead && !terminal && mode === "polling") schedulePoll();
   }
 
   connectWs();

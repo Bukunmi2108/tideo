@@ -58,3 +58,13 @@ export function estimateSeconds(
     0,
   );
 }
+
+export function formatEstimate(seconds: number): string {
+  if (seconds < 60) return "under a minute";
+  const minutes = Math.ceil(seconds / 60);
+  if (minutes < 5)
+    return `about ${minutes} minute${minutes === 1 ? "" : "s"}`;
+  if (minutes < 60) return `about ${Math.ceil(minutes / 5) * 5} minutes`;
+  const hours = Math.ceil(minutes / 30) / 2;
+  return `about ${hours} hour${hours === 1 ? "" : "s"}`;
+}

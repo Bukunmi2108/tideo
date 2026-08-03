@@ -332,6 +332,57 @@ describe("watch() — fallback to polling", () => {
     expect(states[0].status).toBe("done");
     teardown();
   });
+
+  it("does not restart polling when an in-flight poll resolves after WebSocket recovery", async () => {
+    vi.spyOn(Math, "random").mockReturnValue(0);
+    let finishFirstPoll:
+      | ((value: {
+          ok: boolean;
+          status: number;
+          json: () => Promise<{ job_id: string; status: string; progress: object }>;
+        }) => void)
+      | undefined;
+    const fetchMock = vi.fn(
+      () =>
+        new Promise<{
+          ok: boolean;
+          status: number;
+          json: () => Promise<{ job_id: string; status: string; progress: object }>;
+        }>((resolve) => {
+          finishFirstPoll = resolve;
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const modes: string[] = [];
+    const teardown = watch("j1", {
+      onSnapshot: () => {},
+      onProgress: () => {},
+      onState: () => {},
+      onMode: (mode) => modes.push(mode),
+    });
+
+    MockWS.last!.die();
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(3000);
+    MockWS.last!.open();
+    finishFirstPoll!({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        job_id: "j1",
+        status: "transcoding",
+        progress: {},
+      }),
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(3000);
+
+    expect(modes).toEqual(["polling", "live"]);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    teardown();
+  });
 });
 
 describe("watch() — teardown", () => {
