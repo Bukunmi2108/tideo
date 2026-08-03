@@ -87,11 +87,13 @@ describe("player", () => {
     hls.emit("manifest-parsed");
 
     const quality = root.querySelector(".pl-quality-select") as HTMLSelectElement;
+    const caret = root.querySelector(".pl-quality > .icon--caret");
     expect(Array.from(quality.options).map((option) => option.textContent)).toEqual([
       "Auto",
       "480p",
       "720p",
     ]);
+    expect(caret?.getAttribute("aria-hidden")).toBe("true");
     quality.value = "1";
     quality.dispatchEvent(new Event("change", { bubbles: true }));
     expect(hls.currentLevel).toBe(1);

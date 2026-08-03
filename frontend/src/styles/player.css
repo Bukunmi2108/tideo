@@ -175,6 +175,7 @@
 }
 
 .pl-quality-select {
+  appearance: none;
   min-width: 82px;
   min-height: 44px;
   border: 1px solid rgb(255 255 255 / 22%);
@@ -183,12 +184,22 @@
   color: #fff;
   font-family: var(--font-mono);
   font-size: 12px;
-  padding: 0 var(--sp-3);
+  padding: 0 32px 0 var(--sp-3);
 }
 
 .pl-quality-select:focus-visible {
   outline: 3px solid var(--color-focus);
   outline-offset: 3px;
+}
+
+.pl-quality > .icon--caret {
+  position: absolute;
+  top: 50%;
+  right: 10px;
+  width: 14px;
+  height: 14px;
+  pointer-events: none;
+  transform: translateY(-50%);
 }
 
 .pl-cc-on {
@@ -261,7 +272,7 @@
 
   .pl-quality-select {
     min-width: 72px;
-    padding-inline: var(--sp-2);
+    padding-left: var(--sp-2);
   }
 }
 

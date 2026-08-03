@@ -1,4 +1,5 @@
 import arrowClockwise from "@phosphor-icons/core/regular/arrow-clockwise.svg?raw";
+import caretDown from "@phosphor-icons/core/regular/caret-down.svg?raw";
 import checkCircle from "@phosphor-icons/core/regular/check-circle.svg?raw";
 import closedCaptioning from "@phosphor-icons/core/regular/closed-captioning.svg?raw";
 import copy from "@phosphor-icons/core/regular/copy.svg?raw";
@@ -15,6 +16,7 @@ import videoCamera from "@phosphor-icons/core/regular/video-camera.svg?raw";
 import xCircle from "@phosphor-icons/core/regular/x-circle.svg?raw";
 
 const ICONS = {
+  caret: caretDown,
   captions: closedCaptioning,
   check: checkCircle,
   copy,

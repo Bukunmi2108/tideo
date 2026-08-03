@@ -48,6 +48,7 @@ export function mountPlayer(
       <label class="pl-quality">
         <span class="sr-only">Playback quality</span>
         <select class="pl-quality-select" aria-label="Playback quality"><option value="-1">Auto</option></select>
+        ${icon("caret")}
       </label>
       <button class="pl-btn pl-cc" type="button" aria-label="Captions" aria-pressed="false" hidden>${icon("captions")}</button>
       <button class="pl-btn pl-full" type="button" aria-label="Enter fullscreen">${icon("fullscreen")}</button>
