@@ -1,0 +1,311 @@
+/* ---- Library (history) ---------------------------------------------------- */
+
+.hist-main {
+  max-width: 1240px;
+  margin: 0 auto;
+  padding: 0 0 var(--sp-8);
+}
+.hist-title {
+  font-family: var(--font-display);
+  font-size: 15px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--text-dim);
+  padding: 0 var(--sp-6);
+  margin-bottom: var(--sp-4);
+}
+.hist-body {
+  padding: var(--sp-6) 0 0;
+}
+
+/* hero: the most-recent finished title, cinematically */
+.hero {
+  position: relative;
+  margin: 0 0 var(--sp-7);
+  min-height: clamp(340px, 56vh, 560px);
+  display: flex;
+  align-items: flex-end;
+  overflow: hidden;
+  isolation: isolate;
+}
+.hero-bg {
+  position: absolute;
+  inset: 0;
+  z-index: -2;
+  object-fit: cover;
+  width: 100%;
+  height: 100%;
+  transform: scale(1.04);
+}
+.hero::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background:
+    linear-gradient(to top, var(--bg) 4%, rgba(8, 8, 12, 0.2) 55%, transparent),
+    linear-gradient(
+      to right,
+      rgba(8, 8, 12, 0.92) 18%,
+      rgba(8, 8, 12, 0.35) 60%,
+      transparent
+    );
+}
+.hero-inner {
+  padding: var(--sp-7) var(--sp-6) var(--sp-6);
+  max-width: 640px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+.hero-eyebrow {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  color: var(--accent);
+}
+.hero-name {
+  font-family: var(--font-display);
+  font-size: clamp(34px, 5.5vw, 60px);
+  font-weight: 700;
+  line-height: 1.02;
+  letter-spacing: -0.03em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+.hero-spec {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--text-dim);
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1) var(--sp-3);
+}
+.hero-spec b {
+  color: var(--text);
+  font-weight: 600;
+}
+.hero-actions {
+  display: flex;
+  gap: var(--sp-3);
+  margin-top: var(--sp-2);
+}
+
+/* grid */
+.hist-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(232px, 1fr));
+  gap: var(--sp-4);
+  padding: 0 var(--sp-6);
+}
+.hist-card {
+  position: relative;
+  display: block;
+  border-radius: var(--r-lg);
+  overflow: hidden;
+  text-decoration: none;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  transition:
+    transform var(--transition),
+    box-shadow var(--transition),
+    border-color var(--transition);
+}
+.hist-card:hover {
+  transform: translateY(-4px) scale(1.02);
+  border-color: var(--border-focus);
+  box-shadow: var(--shadow-lg);
+  z-index: 2;
+}
+.hist-card:hover .hist-poster {
+  filter: brightness(0.5);
+}
+.hist-card--sk {
+  pointer-events: none;
+}
+.hist-poster {
+  aspect-ratio: 16 / 9;
+  width: 100%;
+  object-fit: cover;
+  background: var(--surface-2);
+  display: block;
+  transition: filter var(--transition);
+}
+.hist-poster--empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-xdim);
+}
+.hist-poster--empty .icon {
+  width: 28px;
+  height: 28px;
+}
+.hist-meta {
+  padding: var(--sp-3) var(--sp-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+.hist-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+}
+.hist-name {
+  font-weight: 600;
+  font-size: 14px;
+  letter-spacing: -0.01em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.hist-sub {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.hist-exp {
+  font-size: 12px;
+  color: var(--text-xdim);
+}
+
+/* play affordance revealed on hover, centered over the poster */
+.hist-play {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  aspect-ratio: 16 / 9;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity var(--transition);
+  pointer-events: none;
+}
+.hist-card:hover .hist-play,
+.hist-card:focus-visible .hist-play {
+  opacity: 1;
+}
+.hist-play span {
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #0b0b14;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding-left: 2px;
+  box-shadow: var(--shadow);
+}
+.hist-play .icon {
+  width: 18px;
+  height: 18px;
+}
+
+/* status badges: colour AND a text label, so they read without relying on hue */
+.hist-badge {
+  cursor: default;
+}
+.hist-badge--done {
+  background: color-mix(in srgb, var(--success) 18%, transparent);
+  color: var(--success);
+}
+.hist-badge--failed {
+  background: color-mix(in srgb, var(--danger) 18%, transparent);
+  color: var(--danger);
+}
+.hist-badge--cancelled {
+  background: var(--surface-3);
+  color: var(--text-dim);
+}
+.hist-badge--expired {
+  background: color-mix(in srgb, var(--warning) 16%, transparent);
+  color: var(--warning);
+}
+
+.hist-more {
+  margin: var(--sp-6) auto 0;
+  display: block;
+}
+
+/* ---- Responsive ----------------------------------------------------------- */
+
+@media (max-width: 720px) {
+  .site-header {
+    padding: 0 var(--sp-4);
+  }
+  .hist-title,
+  .hist-grid {
+    padding-left: var(--sp-4);
+    padding-right: var(--sp-4);
+  }
+  .hero-inner {
+    padding: var(--sp-6) var(--sp-4) var(--sp-5);
+  }
+  .spec-grid {
+    grid-template-columns: 1fr;
+  }
+  .commit-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .commit-row .btn {
+    width: 100%;
+  }
+  .upload-card,
+  .inspect-card {
+    padding: var(--sp-5);
+  }
+}
+
+/* ---- Reduced motion ------------------------------------------------------- */
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+  .hero-bg {
+    transform: none;
+  }
+}
+
+/* ---- Card hover-scrub (sprite flipbook) ----------------------------------- */
+
+.hist-scrub {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  aspect-ratio: 16 / 9;
+  background-color: #000;
+  opacity: 0;
+  transition: opacity var(--transition);
+  pointer-events: none;
+  z-index: 1;
+}
+.hist-scrub.on {
+  opacity: 1;
+}
+.hist-scrub.on ~ .hist-play {
+  opacity: 0;
+}
+.hist-card:has(.hist-scrub.on):hover .hist-poster {
+  filter: none;
+}

@@ -4,6 +4,7 @@ import { mount as mountLanding } from "./landing";
 import { mount as mountUpload } from "./upload";
 import { mount as mountJob } from "./job";
 import { mount as mountHistory } from "./history";
+import { mountNotFound, mountPrivacy, mountTerms } from "./legal";
 
 // SPA entry: mounts one page into #app at a time, running the previous page's
 // teardown first so watchers/timers/player don't leak across routes.
@@ -15,6 +16,8 @@ const routes: [RegExp, Mounter][] = [
   [/^\/upload\/?$/, mountUpload],
   [/^\/job\/?$/, mountJob],
   [/^\/history\/?$/, mountHistory],
+  [/^\/privacy\/?$/, mountPrivacy],
+  [/^\/terms\/?$/, mountTerms],
 ];
 
 const app = document.getElementById("app")!;
@@ -28,17 +31,6 @@ function render(isNavigation: boolean): void {
   const query = new URLSearchParams(location.search);
   teardown = match ? match[1](app, query) : mountNotFound(app);
   applyRouteChrome(app, routeMeta(location.pathname), isNavigation);
-}
-
-function mountNotFound(root: HTMLElement): () => void {
-  root.innerHTML = `
-    <main id="main-content" class="job-main">
-      <div class="inspect-card inspect-card--terminal">
-        <h1 class="inspect-title">Page not found</h1>
-        <a href="/" class="btn btn-primary">Back home</a>
-      </div>
-    </main>`;
-  return () => {};
 }
 
 startRouter(render);

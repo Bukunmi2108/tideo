@@ -16,6 +16,7 @@
     "check": "npm test && npm run build && npm run audit"
   },
   "dependencies": {
+    "@phosphor-icons/core": "^2.1.1",
     "hls.js": "^1.6.16"
   },
   "devDependencies": {

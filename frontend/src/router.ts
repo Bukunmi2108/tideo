@@ -6,26 +6,34 @@ export interface RouteMeta {
 }
 
 const FALLBACK_META: RouteMeta = {
-  title: "Page not found — Tideo",
+  title: "Page not found | Tideo",
   description: "The requested Tideo page could not be found.",
 };
 
 const ROUTE_META: Record<string, RouteMeta> = {
   "/": {
-    title: "Tideo — Adaptive video, on demand",
+    title: "Tideo | Adaptive video, on demand",
     description: "Turn one source video into an adaptive HLS ladder, encoded in parallel.",
   },
   "/upload": {
-    title: "Upload — Tideo",
+    title: "Upload | Tideo",
     description: "Upload a video to inspect it and build an adaptive streaming ladder.",
   },
   "/job": {
-    title: "Video job — Tideo",
+    title: "Video job | Tideo",
     description: "Inspect, configure, and follow a Tideo video transcode.",
   },
   "/history": {
-    title: "My videos — Tideo",
+    title: "My videos | Tideo",
     description: "Review the videos created in this browser's guest session.",
+  },
+  "/privacy": {
+    title: "Privacy | Tideo",
+    description: "Learn how Tideo handles guest sessions, temporary media, and public watch links.",
+  },
+  "/terms": {
+    title: "Terms | Tideo",
+    description: "Review the acceptable-use and availability terms for the public Tideo service.",
   },
 };
 

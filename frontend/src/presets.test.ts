@@ -17,7 +17,9 @@ describe("buildPicker", () => {
 
     expect(byPreset["1080p"].available).toBe(false);
     expect(byPreset["1080p"].checked).toBe(false);
-    expect(byPreset["1080p"].reason).toBe("source is 480p — no upscale");
+    expect(byPreset["1080p"].reason).toBe(
+      "Source is 480p. Tideo will not upscale it.",
+    );
   });
 
   it("returns the full ladder in catalog (highest-first) order", () => {

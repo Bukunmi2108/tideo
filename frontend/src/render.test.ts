@@ -5,6 +5,8 @@ import {
   humanBitrate,
   relativeTime,
   expiresIn,
+  siteFooter,
+  siteHeader,
 } from "./render";
 
 const NOW = Date.parse("2026-06-17T12:00:00Z");
@@ -64,9 +66,9 @@ describe("humanBitrate", () => {
     expect(humanBitrate(3_600_000)).toBe("3.6 Mbps");
   });
 
-  it("renders a dash for null/zero", () => {
-    expect(humanBitrate(null)).toBe("—");
-    expect(humanBitrate(0)).toBe("—");
+  it("renders an explicit fallback for null/zero", () => {
+    expect(humanBitrate(null)).toBe("Not available");
+    expect(humanBitrate(0)).toBe("Not available");
   });
 });
 
@@ -75,5 +77,40 @@ describe("humanBytes", () => {
     expect(humanBytes(512)).toBe("512 B");
     expect(humanBytes(2048)).toBe("2.0 KB");
     expect(humanBytes(5 * 1024 ** 2)).toBe("5.0 MB");
+  });
+});
+
+describe("application shell", () => {
+  it("marks the current primary route and keeps both navigation targets touch-sized", () => {
+    history.replaceState(null, "", "/history");
+    document.body.innerHTML = siteHeader();
+
+    const navigation = document.querySelector("nav");
+    const links = Array.from(
+      document.querySelectorAll<HTMLAnchorElement>(".site-nav-link"),
+    );
+
+    expect(navigation?.getAttribute("aria-label")).toBe("Primary navigation");
+    expect(links.map((link) => link.textContent)).toEqual(["Upload", "My videos"]);
+    expect(links[1].getAttribute("aria-current")).toBe("page");
+  });
+
+  it("exposes product, legal, source, and API destinations in the footer", () => {
+    document.body.innerHTML = siteFooter();
+
+    const footer = document.querySelector("footer");
+    const links = Array.from(
+      document.querySelectorAll<HTMLAnchorElement>("footer a"),
+    );
+
+    expect(footer?.textContent).toContain("Temporary outputs");
+    expect(links[0].getAttribute("href")).toBe(
+      "https://github.com/Bukunmi2108/tideo",
+    );
+    expect(links[1].getAttribute("href")?.endsWith("/docs")).toBe(true);
+    expect(links.slice(2).map((link) => link.getAttribute("href"))).toEqual([
+      "/privacy",
+      "/terms",
+    ]);
   });
 });

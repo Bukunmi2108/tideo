@@ -26,7 +26,7 @@ export function humanDuration(seconds: number): string {
 }
 
 export function humanBitrate(bps: number | null): string {
-  if (!bps) return "—";
+  if (!bps) return "Not available";
   if (bps < 1_000_000) return `${Math.round(bps / 1000)} kbps`;
   return `${(bps / 1_000_000).toFixed(1)} Mbps`;
 }
@@ -71,24 +71,41 @@ export function siteHeader(): string {
   const here = (p: string) => (path === p ? ' aria-current="page"' : "");
   return `<a class="skip-link" href="#main-content">Skip to content</a>
   <header class="site-header">
-    <a href="/" class="wordmark">
-      <svg class="wordmark-mark" width="20" height="18" viewBox="0 0 20 18" aria-hidden="true">
-        <rect x="0.5" y="11" width="3" height="7" rx="1.5" />
-        <rect x="6" y="7.5" width="3" height="10.5" rx="1.5" />
-        <rect x="11.5" y="4" width="3" height="14" rx="1.5" />
-        <rect x="17" y="0.5" width="3" height="17.5" rx="1.5" />
-      </svg>tideo</a>
-    <nav class="site-nav">
-      <a href="/upload"${here("/upload")} class="site-nav-link">Upload</a>
-      <a href="/history"${here("/history")} class="site-nav-link">My videos</a>
-    </nav>
+    <div class="site-header-inner">
+      <a href="/" class="wordmark" aria-label="Tideo overview"${here("/")}>
+        <svg class="wordmark-mark" width="20" height="18" viewBox="0 0 20 18" aria-hidden="true">
+          <rect x="0.5" y="11" width="3" height="7" rx="1.5" />
+          <rect x="6" y="7.5" width="3" height="10.5" rx="1.5" />
+          <rect x="11.5" y="4" width="3" height="14" rx="1.5" />
+          <rect x="17" y="0.5" width="3" height="17.5" rx="1.5" />
+        </svg>tideo</a>
+      <nav class="site-nav" aria-label="Primary navigation">
+        <a href="/upload"${here("/upload")} class="site-nav-link">Upload</a>
+        <a href="/history"${here("/history")} class="site-nav-link">My videos</a>
+      </nav>
+    </div>
   </header>`;
 }
 
 export function siteFooter(): string {
-  return `<footer class="colophon">
-    <span>tideo</span><span aria-hidden="true">·</span>
-    <span>adaptive video, on demand</span><span aria-hidden="true">·</span>
-    <a class="gh" href="https://github.com/Bukunmi2108/tideo" target="_blank" rel="noopener">source&nbsp;↗</a>
+  const apiOrigin = (import.meta.env.VITE_API_BASE ?? "").replace(/\/$/, "");
+  const apiDocs = `${apiOrigin}/docs`;
+  const rawPath = typeof location !== "undefined" ? location.pathname : "/";
+  const path = rawPath.length > 1 ? rawPath.replace(/\/$/, "") : rawPath;
+  const here = (p: string) => (path === p ? ' aria-current="page"' : "");
+  return `<footer class="site-footer">
+    <div class="site-footer-inner">
+      <div class="site-footer-copy">
+        <strong>Tideo</strong>
+        <span>Adaptive video, on demand.</span>
+      </div>
+      <nav class="site-footer-nav" aria-label="Footer navigation">
+        <a href="https://github.com/Bukunmi2108/tideo" target="_blank" rel="noopener noreferrer">Source</a>
+        <a href="${esc(apiDocs)}" target="_blank" rel="noopener noreferrer">API docs</a>
+        <a href="/privacy"${here("/privacy")}>Privacy</a>
+        <a href="/terms"${here("/terms")}>Terms</a>
+      </nav>
+      <p class="site-footer-note">Temporary outputs expire automatically. Shared watch links work for anyone with the link.</p>
+    </div>
   </footer>`;
 }

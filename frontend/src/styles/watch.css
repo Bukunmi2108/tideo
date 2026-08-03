@@ -1,0 +1,247 @@
+/* ---- Watch page (immersive, full-bleed) ----------------------------------- */
+
+.job-main:has(.watch) {
+  display: block;
+  padding: 0;
+  min-height: 0;
+}
+
+.watch-stage {
+  position: relative;
+  height: calc(100dvh - var(--header-h));
+  min-height: 420px;
+  background: #000;
+  overflow: hidden;
+}
+/* the player fills the stage */
+.player--stage {
+  position: absolute;
+  inset: 0;
+  height: 100%;
+  border-radius: 0;
+  box-shadow: none;
+}
+.player--stage .player-video {
+  width: 100%;
+  height: 100%;
+  max-height: none;
+  object-fit: contain;
+}
+
+/* title overlaid top-left, on a soft scrim; never blocks the video controls */
+.watch-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  padding: var(--sp-6) var(--sp-6) var(--sp-8);
+  background: linear-gradient(to bottom, rgba(0, 0, 0, 0.65), transparent);
+  pointer-events: none;
+  z-index: 2;
+}
+.watch-eyebrow {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  color: var(--accent);
+}
+.watch-title {
+  font-family: var(--font-display);
+  font-size: clamp(24px, 4vw, 44px);
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  line-height: 1.05;
+  max-width: 22ch;
+  margin-top: 4px;
+  text-shadow: 0 2px 24px rgba(0, 0, 0, 0.6);
+}
+.watch-scroll {
+  position: absolute;
+  bottom: var(--sp-5);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 4; /* above the player chrome, so it's always clickable */
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(6px);
+  padding: var(--sp-2) var(--sp-4);
+  border-radius: 999px;
+  border: 1px solid var(--border-2);
+  cursor: pointer;
+  transition:
+    color var(--transition),
+    border-color var(--transition),
+    transform var(--transition);
+}
+.watch-scroll:hover {
+  color: var(--text);
+  border-color: var(--accent);
+  transform: translateX(-50%) translateY(2px);
+}
+
+/* detail below the fold */
+.watch-detail {
+  padding: var(--sp-8) var(--sp-5);
+  border-top: 1px solid var(--border);
+  scroll-margin-top: var(--header-h); /* anchor clears the sticky header */
+}
+.watch-detail-inner {
+  max-width: 920px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-5);
+}
+.watch-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--sp-5);
+  flex-wrap: wrap;
+}
+.watch-name {
+  font-family: var(--font-display);
+  font-size: clamp(22px, 3vw, 30px);
+  font-weight: 700;
+  letter-spacing: -0.025em;
+}
+.watch-meta {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--text-dim);
+  margin-top: 6px;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+}
+.watch-chip {
+  color: var(--success);
+  background: color-mix(in srgb, var(--success) 16%, transparent);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  padding: 3px var(--sp-2);
+  border-radius: 999px;
+}
+.watch-actions {
+  display: flex;
+  gap: var(--sp-3);
+  flex-wrap: wrap;
+}
+
+/* the rendition ladder - real measured data, the engineering payoff */
+.ladder {
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  overflow: hidden;
+  background: var(--surface);
+}
+.ladder-head {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--text-dim);
+  padding: var(--sp-3) var(--sp-4);
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-2);
+}
+.ladder-loading {
+  padding: var(--sp-4);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-xdim);
+}
+.rung {
+  display: grid;
+  grid-template-columns: 56px 92px 1fr 86px 130px;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-3) var(--sp-4);
+  border-bottom: 1px solid var(--border);
+}
+.rung:last-child {
+  border-bottom: none;
+}
+.rung-label {
+  font-family: var(--font-display);
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+.rung-res,
+.rung-rate,
+.rung-codec {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+.rung-rate {
+  text-align: right;
+  color: var(--text);
+}
+.rung-codec {
+  color: var(--text-xdim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rung-bar {
+  height: 8px;
+  background: var(--surface-3);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.rung-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--accent-strong), var(--accent));
+  border-radius: 4px;
+}
+
+@media (max-width: 640px) {
+  .rung {
+    grid-template-columns: 48px 1fr 78px;
+  }
+  .rung-res,
+  .rung-codec {
+    display: none;
+  }
+}
+
+/* ---- Seek storyboard preview ---------------------------------------------- */
+
+.pl-preview {
+  position: absolute;
+  bottom: 58px;
+  transform: translateX(-50%);
+  z-index: 3;
+  width: 168px;
+  padding: 4px;
+  background: rgba(0, 0, 0, 0.85);
+  border: 1px solid var(--border-2);
+  border-radius: var(--r-sm);
+  box-shadow: var(--shadow-lg);
+  pointer-events: none;
+}
+.pl-preview[hidden] {
+  display: none;
+}
+.pl-preview-img {
+  width: 100%;
+  border-radius: 4px;
+  background-color: #000;
+}
+.pl-preview-time {
+  display: block;
+  text-align: center;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text);
+  padding-top: 3px;
+  font-variant-numeric: tabular-nums;
+}

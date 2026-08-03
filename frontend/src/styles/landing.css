@@ -1,0 +1,228 @@
+/* ---- Landing -------------------------------------------------------------- */
+
+.lp-main {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 0 var(--sp-6) var(--sp-8);
+}
+
+.lp-hero {
+  display: grid;
+  grid-template-columns: 1.05fr 1fr;
+  gap: var(--sp-7);
+  align-items: center;
+  padding: clamp(var(--sp-6), 7vw, var(--sp-8)) 0 var(--sp-8);
+}
+.lp-hero-copy {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+.lp-eyebrow {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+  color: var(--accent);
+}
+.lp-title {
+  font-family: var(--font-display);
+  font-size: clamp(38px, 6vw, 68px);
+  font-weight: 700;
+  line-height: 1.02;
+  letter-spacing: -0.035em;
+}
+.lp-lede {
+  font-size: clamp(16px, 1.4vw, 18px);
+  color: var(--text-dim);
+  max-width: 46ch;
+}
+.lp-actions {
+  display: flex;
+  gap: var(--sp-3);
+  flex-wrap: wrap;
+  margin-top: var(--sp-2);
+}
+
+/* the filmstrip screen - a job's sprite, auto-advancing like a preview */
+.lp-hero-screen {
+  position: relative;
+  border-radius: var(--r-lg);
+  overflow: hidden;
+  background: var(--surface);
+  border: 1px solid var(--border-2);
+  box-shadow: var(--shadow-lg);
+}
+/* preview chrome bar: a REC dot + signal hairline, like a capture deck */
+.smpte {
+  height: 28px;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 0 var(--sp-3);
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--text-xdim);
+}
+.smpte::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+.smpte::after {
+  content: "preview";
+}
+.film-screen {
+  aspect-ratio: 16 / 9;
+  background-color: #050507;
+  background-size: cover;
+}
+.film-scrub {
+  height: 30px;
+  display: flex;
+  align-items: center;
+  padding: 0 var(--sp-3);
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.7), transparent);
+  margin-top: -30px;
+  position: relative;
+}
+.film-scrub span {
+  height: 3px;
+  width: 100%;
+  border-radius: 2px;
+  background: linear-gradient(
+    to right,
+    var(--accent) 0%,
+    var(--accent) 38%,
+    rgba(255, 255, 255, 0.25) 38%
+  );
+  animation: scrub 6s linear infinite;
+}
+@keyframes scrub {
+  from {
+    background: linear-gradient(
+      to right,
+      var(--accent) 0 2%,
+      rgba(255, 255, 255, 0.25) 2%
+    );
+  }
+  to {
+    background: linear-gradient(
+      to right,
+      var(--accent) 0 100%,
+      rgba(255, 255, 255, 0.25) 100%
+    );
+  }
+}
+
+/* how it works - a real pipeline, so the numbered sequence carries meaning */
+.lp-how {
+  padding: var(--sp-7) 0;
+  border-top: 1px solid var(--border);
+}
+.lp-section-title {
+  font-family: var(--font-display);
+  font-size: clamp(24px, 3vw, 34px);
+  font-weight: 700;
+  letter-spacing: -0.025em;
+  margin-bottom: var(--sp-6);
+}
+.lp-steps {
+  list-style: none;
+  display: grid;
+  gap: var(--sp-2);
+}
+.lp-step {
+  display: grid;
+  grid-template-columns: 56px 1fr;
+  gap: var(--sp-4);
+  align-items: start;
+  padding: var(--sp-4) 0;
+  border-bottom: 1px solid var(--border);
+}
+.lp-step-n {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--accent);
+  padding-top: 4px;
+  font-variant-numeric: tabular-nums;
+}
+.lp-step-tag {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--text-xdim);
+}
+.lp-step-head {
+  font-family: var(--font-display);
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  margin: 2px 0 4px;
+}
+.lp-step-text {
+  color: var(--text-dim);
+  font-size: 16px;
+  max-width: 64ch;
+}
+
+.lp-closer {
+  text-align: center;
+  padding: var(--sp-8) var(--sp-5);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sp-5);
+  border-top: 1px solid var(--border);
+}
+.lp-closer-title {
+  font-family: var(--font-display);
+  font-size: clamp(24px, 3.5vw, 38px);
+  font-weight: 700;
+  letter-spacing: -0.025em;
+  max-width: 18ch;
+}
+
+@media (max-width: 860px) {
+  .lp-hero {
+    grid-template-columns: 1fr;
+    gap: var(--sp-5);
+  }
+  .lp-hero-screen {
+    order: -1;
+  }
+}
+
+/* spec ledger - masthead stats, like capit/givemore */
+.lp-ledger {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2) var(--sp-6);
+  padding-top: var(--sp-2);
+}
+.lp-ledger div {
+  display: flex;
+  flex-direction: column;
+}
+.lp-ledger dt {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--text-xdim);
+  order: 2;
+}
+.lp-ledger dd {
+  font-family: var(--font-mono);
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
