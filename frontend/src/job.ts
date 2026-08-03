@@ -756,6 +756,7 @@ export function mount(root: HTMLElement, query: URLSearchParams): () => void {
   errorAttempts = 0;
   // gen is NOT reset — it stays monotonic across mounts so a stale in-flight load() can't write into a remount's DOM
 
+  render();
   void load();
 
   return () => {
