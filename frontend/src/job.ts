@@ -11,6 +11,12 @@ import {
   type Manifest,
 } from "./api";
 import { watch, type StateFrame } from "./live";
+import {
+  failureMessage,
+  friendlyCodec,
+  friendlyContainer,
+  readinessExplanation,
+} from "./job-copy";
 import { mountPlayer, type PlayerHandle } from "./player";
 import {
   esc,
@@ -19,7 +25,12 @@ import {
   siteFooter,
   siteHeader,
 } from "./render";
-import { buildPicker, estimateSeconds, type PickerRow } from "./presets";
+import {
+  buildPicker,
+  estimateSeconds,
+  formatEstimate,
+  type PickerRow,
+} from "./presets";
 import { loadStoryboard, spriteUrl } from "./sprite";
 
 // Phase 5.4/5.5 — inspect/commit, then live progress and the player.
@@ -53,7 +64,10 @@ let jobTitle = ""; // source filename, for the watch page header
 let presets: string[] = [];
 let progress: Record<string, number> = {};
 let mode: "live" | "polling" = "live";
+let processingStatus: "queued" | "transcoding" = "queued";
 let confirmingCancel = false;
+let cancelling = false;
+let cancelError: string | null = null;
 
 // async drivers (one set at a time)
 let pollTimer: ReturnType<typeof setTimeout> | null = null;
@@ -191,17 +205,35 @@ function startProgress(job: JobResponse): void {
   presets = job.presets ?? [];
   progress = job.progress ?? {};
   mode = "live";
+  processingStatus = job.status === "transcoding" ? "transcoding" : "queued";
   confirmingCancel = false;
+  cancelling = false;
+  cancelError = null;
   setView({ tag: "progress" });
   startWatch();
 }
 
 async function doCancel(): Promise<void> {
-  if (!jobId) return;
+  if (!jobId || cancelling) return;
+  cancelling = true;
+  cancelError = null;
+  render();
+  document.querySelector<HTMLElement>(".cancel-confirm")?.focus();
   try {
-    await postCancel(jobId);
+    const result = await postCancel(jobId);
+    if (result.status === "cancelled") {
+      stopWatch();
+      setView({ tag: "cancelled" });
+    } else {
+      void load();
+    }
   } catch (e) {
+    cancelling = false;
     if (e instanceof ApiError && e.status === 409) return load();
+    cancelError =
+      "Tideo couldn’t cancel this job. Processing is still running. Try again.";
+    render();
+    document.getElementById("cancel-confirm-btn")?.focus();
   }
 }
 
@@ -211,10 +243,13 @@ function startWatch(): void {
   unwatch = watch(jobId, {
     onSnapshot: (f) => {
       if (f.presets?.length) presets = f.presets;
+      if (f.status === "queued" || f.status === "transcoding")
+        processingStatus = f.status;
       progress = { ...progress, ...f.progress };
       if (view.tag === "progress") updateBars();
     },
     onProgress: (f) => {
+      processingStatus = "transcoding";
       progress[f.preset] = f.percent;
       if (view.tag === "progress") updateBars();
     },
@@ -272,12 +307,17 @@ async function commit(): Promise<void> {
   } catch (e) {
     committing = false;
     if (e instanceof ApiError && e.status === 409) return load();
-    commitError =
-      e instanceof ApiError && e.status === 422
-        ? e.message
-        : "Couldn't start transcoding. Please try again.";
+    commitError = commitFailureMessage(e);
     render();
+    document.querySelector<HTMLElement>(".commit-error")?.focus();
   }
+}
+
+function commitFailureMessage(error: unknown): string {
+  if (error instanceof ApiError && error.status === 422) {
+    return "Those output choices are no longer available. Refresh the page and choose again.";
+  }
+  return "Tideo couldn’t start transcoding. Your choices are preserved. Try again.";
 }
 
 // ---- Render ---------------------------------------------------------------
@@ -285,6 +325,16 @@ async function commit(): Promise<void> {
 function setView(next: View): void {
   view = next;
   render();
+  if (
+    next.tag === "failed" ||
+    next.tag === "cancelled" ||
+    next.tag === "expired" ||
+    next.tag === "notfound"
+  ) {
+    appEl
+      .querySelector<HTMLElement>(".inspect-card--terminal .inspect-title")
+      ?.focus();
+  }
 }
 
 function render(): void {
@@ -323,20 +373,29 @@ function card(): string {
     case "cancelled":
       return cardMessage(
         "Job cancelled",
-        "This job was cancelled. You can upload it again.",
+        "Transcoding stopped and temporary work from this job may have been discarded.",
+        "/upload",
+        "Upload video",
+        { href: "/history", label: "My videos" },
       );
     case "expired":
       return cardMessage(
         "Outputs expired",
-        "Demo outputs live for a limited time and have been cleaned up. Upload again to re-create them.",
+        "This temporary output reached its retention limit and has been removed. Upload the source again to recreate it.",
+        "/upload",
+        "Upload video",
+        { href: "/history", label: "My videos" },
       );
     case "notfound":
       return cardMessage(
         "Job not found",
-        "This job doesn’t exist or was never created.",
+        "This link is incorrect, expired, or belongs to another browser session.",
+        "/history",
+        "My videos",
+        { href: "/upload", label: "Upload video" },
       );
     case "error":
-      return cardMessage("Something went wrong", view.message);
+      return cardLoadError(view.message);
   }
 }
 
@@ -363,50 +422,54 @@ function cardInspecting(): string {
 function cardAwaiting(job: JobResponse): string {
   const s = job.source!;
   const safe = job.web_safe === true;
-  const badgeReason = job.web_safe_reason
-    ? esc(job.web_safe_reason)
-    : "already H.264/AAC in MP4";
   const filename = job.source_filename
     ? esc(job.source_filename)
     : "your video";
   return `
-    <div class="inspect-card">
+    <div class="inspect-card" ${committing ? 'aria-busy="true"' : ""}>
       <div class="inspect-head">
         <h1 class="inspect-title" title="${filename}">${filename}</h1>
-        <span class="status-badge ${safe ? "status-badge--success" : "status-badge--warning"}"
-              title="${safe ? "Web-ready: fast remux" : badgeReason}">
-          ${safe ? "web-ready" : "needs re-encode"}
+        <span class="status-badge ${safe ? "status-badge--success" : "status-badge--warning"}">
+          ${safe ? "Web-ready" : "Web copy needed"}
         </span>
       </div>
 
       <div class="spec-grid">
-        ${specRow("Container", esc(s.container))}
-        ${specRow("Video", esc(s.video_codec ?? "Not available"))}
-        ${specRow("Audio", s.has_audio ? esc(s.audio_codec ?? "Not available") : "none")}
+        ${specRow("Format", esc(friendlyContainer(s.container)))}
+        ${specRow("Video", esc(friendlyCodec(s.video_codec)))}
+        ${specRow("Audio", s.has_audio ? esc(friendlyCodec(s.audio_codec)) : "No audio")}
         ${specRow("Resolution", `${s.width}×${s.height}`)}
         ${specRow("Duration", humanDuration(s.duration))}
         ${specRow("Bitrate", humanBitrate(s.bitrate))}
       </div>
 
-      <fieldset class="picker">
-        <legend class="picker-legend">Output qualities</legend>
+      <div class="source-readiness ${safe ? "source-readiness--ready" : "source-readiness--convert"}">
+        <strong>${safe ? "Ready for the web" : "Tideo will create a web-ready copy"}</strong>
+        <p>${readinessExplanation(job)}</p>
+      </div>
+
+      <fieldset class="picker" aria-describedby="picker-help">
+        <legend class="picker-legend">Choose outputs</legend>
+        <p class="picker-help" id="picker-help">Select the playback sizes Tideo should create. Unavailable sizes remain visible so the source limit is clear.</p>
         ${rows.map(pickerRowHtml).join("")}
       </fieldset>
 
-      <label class="toggle-row ${hasAudio ? "" : "toggle-disabled"}"
-             title="${hasAudio ? "Transcribe speech to a WebVTT caption track" : "No audio stream. Nothing to transcribe."}">
+      <label class="toggle-row ${hasAudio ? "" : "toggle-disabled"}">
         <input type="checkbox" id="captions-toggle" ${captionsWanted ? "checked" : ""} ${hasAudio ? "" : "disabled"} />
-        <span>Generate captions</span>
-        ${hasAudio ? "" : `<span class="toggle-note">no audio</span>`}
+        <span class="captions-copy">
+          <strong>Generate captions</strong>
+          <span>${hasAudio ? "Creates a WebVTT caption track from the source audio." : "No audio track. Captions are unavailable for this video."}</span>
+        </span>
       </label>
 
-      ${commitError ? `<p class="error-message commit-error">${esc(commitError)}</p>` : ""}
+      ${commitError ? `<p class="error-message commit-error" role="alert" tabindex="-1">${esc(commitError)}</p>` : ""}
+      <p class="sr-only" role="status" aria-live="polite">${committing ? "Starting transcoding" : ""}</p>
 
       <div class="commit-row">
-        <span class="estimate" id="estimate">${estimateText()}</span>
+        <span class="estimate" id="estimate" aria-live="polite">${estimateText()}</span>
         <button class="btn btn-primary" id="commit-btn" type="button"
                 ${selected.size === 0 || committing ? "disabled" : ""}>
-          ${committing ? "Starting…" : "Start transcoding →"}
+          ${committing ? "Starting…" : "Start transcoding"}
         </button>
       </div>
     </div>
@@ -432,27 +495,45 @@ function specRow(key: string, val: string): string {
 
 function estimateText(): string {
   if (selected.size === 0) return "Select at least one quality";
-  return `~${humanDuration(estimateSeconds([...selected], duration))} to transcode (estimate)`;
+  return `Rough estimate: ${formatEstimate(estimateSeconds([...selected], duration))}`;
 }
 
 function cardProgress(): string {
   const allDone =
     presets.length > 0 && presets.every((p) => (progress[p] ?? 0) >= 100);
+  const phase = allDone
+    ? "Packaging outputs"
+    : processingStatus === "queued"
+      ? "Queued"
+      : "Transcoding";
+  const filename = esc(jobTitle || "Your video");
   return `
     <div class="inspect-card progress-card">
-      <div class="inspect-head">
-        <h1 class="inspect-title">${allDone ? "Finalizing…" : "Transcoding…"}</h1>
-        ${mode === "polling" ? `<span class="mode-pill">Live updates paused. Retrying.</span>` : ""}
+      <div class="processing-head">
+        <div>
+          <p class="processing-phase">${phase}</p>
+          <h1 class="inspect-title" title="${filename}">${filename}</h1>
+        </div>
+        <span class="status-badge ${allDone ? "status-badge--success" : "status-badge--warning"}">${allDone ? "Finalizing" : "In progress"}</span>
       </div>
+      ${mode === "polling" ? `<p class="connection-notice" role="status">Live updates paused. Checking automatically.</p>` : ""}
+      <p class="processing-guidance">You can leave this page and return from <a href="/history">My videos</a>. Processing continues in the background.</p>
       <div class="bars">${presets.map(progressBar).join("") || '<p class="term-msg">Queued…</p>'}</div>
-      <p class="progress-status" id="progress-status">${statusLine()}</p>
+      <p class="progress-status" id="progress-status" role="status" aria-live="polite" aria-atomic="true">${statusLine()}</p>
       ${
         confirmingCancel
-          ? `<div class="cancel-confirm">
-             <button class="btn btn-danger" id="cancel-confirm-btn" type="button">Confirm cancel</button>
-             <button class="btn btn-ghost" id="cancel-keep-btn" type="button">Keep going</button>
+          ? `<div class="cancel-confirm" role="group" aria-labelledby="cancel-title" aria-busy="${cancelling}" tabindex="-1">
+             <div>
+               <h2 id="cancel-title">Cancel transcoding?</h2>
+               <p>Completed temporary work may be discarded. This cannot be undone.</p>
+             </div>
+             ${cancelError ? `<p class="error-message cancel-error" role="alert">${esc(cancelError)}</p>` : ""}
+             <div class="cancel-actions">
+               <button class="btn btn-danger" id="cancel-confirm-btn" type="button" ${cancelling ? "disabled" : ""}>${cancelling ? "Cancelling…" : "Cancel job"}</button>
+               <button class="btn btn-ghost" id="cancel-keep-btn" type="button" ${cancelling ? "disabled" : ""}>Keep processing</button>
+             </div>
            </div>`
-          : `<button class="btn btn-ghost" id="cancel-btn" type="button">Cancel</button>`
+          : `<button class="btn btn-ghost cancel-trigger" id="cancel-btn" type="button">Cancel job</button>`
       }
     </div>
   `;
@@ -460,38 +541,64 @@ function cardProgress(): string {
 
 function statusLine(): string {
   const total = presets.length;
+  if (total === 0) return "Waiting for a worker to start this job.";
   const done = presets.filter((p) => (progress[p] ?? 0) >= 100).length;
   if (total > 0 && done === total)
-    return "Packaging and generating thumbnails…";
+    return "Packaging the stream and generating previews.";
   return `${done} of ${total} renditions complete`;
 }
 
 function progressBar(preset: string): string {
-  const pct = Math.round(progress[preset] ?? 0);
+  const pct = progressPercent(progress[preset]);
+  const complete = pct >= 100;
   return `
-    <div class="bar-row" data-bar="${esc(preset)}">
+    <div class="bar-row ${complete ? "is-complete" : ""}" data-bar="${esc(preset)}">
       <span class="bar-label">${esc(preset)}</span>
-      <div class="progress-bar-track"><div class="progress-bar-fill" style="transform: scaleX(${pct / 100})"></div></div>
-      <span class="bar-pct">${pct}%</span>
+      <div class="progress-bar-track" role="progressbar" aria-label="${esc(preset)} transcoding progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}" aria-valuetext="${complete ? "Complete" : `${pct}%`}"><div class="progress-bar-fill" style="transform: scaleX(${pct / 100})"></div></div>
+      <span class="bar-value"><span class="bar-pct">${pct}%</span><span class="bar-complete">${complete ? "Complete" : ""}</span></span>
     </div>
   `;
+}
+
+function progressPercent(value: number | undefined): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return 0;
+  return Math.min(100, Math.max(0, Math.round(value)));
 }
 
 function updateBars(): void {
   for (const p of presets) {
     const row = appEl.querySelector(`[data-bar="${CSS.escape(p)}"]`);
     if (!row) return render(); // bar set changed — rebuild
-    const pct = Math.round(progress[p] ?? 0);
-    row.querySelector<HTMLElement>(".progress-bar-fill")!.style.transform =
+    const pct = progressPercent(progress[p]);
+    const complete = pct >= 100;
+    const track = row.querySelector<HTMLElement>(".progress-bar-track")!;
+    track.setAttribute("aria-valuenow", String(pct));
+    track.setAttribute("aria-valuetext", complete ? "Complete" : `${pct}%`);
+    track.querySelector<HTMLElement>(".progress-bar-fill")!.style.transform =
       `scaleX(${pct / 100})`;
     row.querySelector<HTMLElement>(".bar-pct")!.textContent = `${pct}%`;
+    row.querySelector<HTMLElement>(".bar-complete")!.textContent = complete
+      ? "Complete"
+      : "";
+    row.classList.toggle("is-complete", complete);
   }
   const status = document.getElementById("progress-status");
   if (status) status.textContent = statusLine();
   const allDone =
     presets.length > 0 && presets.every((p) => (progress[p] ?? 0) >= 100);
-  const title = appEl.querySelector(".progress-card .inspect-title");
-  if (title && allDone) title.textContent = "Finalizing…";
+  const phase = appEl.querySelector(".processing-phase");
+  if (phase)
+    phase.textContent = allDone
+      ? "Packaging outputs"
+      : processingStatus === "queued"
+        ? "Queued"
+        : "Transcoding";
+  const badge = appEl.querySelector(".progress-card .status-badge");
+  if (badge && allDone) {
+    badge.textContent = "Finalizing";
+    badge.classList.remove("status-badge--warning");
+    badge.classList.add("status-badge--success");
+  }
 }
 
 function captionNote(results: JobResults): string {
@@ -584,27 +691,55 @@ function embedSnippet(playlistUrl: string): string {
 }
 
 function cardFailed(error?: JobError): string {
-  const code = error?.code ?? "FAILED";
-  const stage = error?.stage ? ` · ${esc(error.stage)}` : "";
-  const retry = error?.retryable
-    ? " This may be transient. Try uploading again."
-    : "";
+  const inspecting = error?.stage === "inspect";
+  const title = inspecting
+    ? "Couldn’t inspect this video"
+    : "Couldn’t finish transcoding";
   return `
     <div class="inspect-card inspect-card--terminal">
-      <h1 class="inspect-title">Couldn’t process this video</h1>
-      <p class="term-code">${esc(code)}${stage}</p>
-      <p class="term-msg">${esc(error?.message ?? "The file couldn’t be inspected.")}${retry}</p>
-      <a href="/" class="btn btn-primary">Upload another file</a>
+      <h1 class="inspect-title" tabindex="-1">${title}</h1>
+      <p class="term-msg">${failureMessage(error)}</p>
+      ${terminalActions("/upload", "Upload video", { href: "/history", label: "My videos" })}
     </div>
   `;
 }
 
-function cardMessage(title: string, msg: string): string {
+function terminalActions(
+  href: string,
+  label: string,
+  secondary?: { href: string; label: string },
+): string {
+  return `<div class="terminal-actions">
+    <a href="${href}" class="btn btn-primary">${label}</a>
+    ${secondary ? `<a href="${secondary.href}" class="btn btn-ghost">${secondary.label}</a>` : ""}
+  </div>`;
+}
+
+function cardMessage(
+  title: string,
+  msg: string,
+  href = "/upload",
+  label = "Upload video",
+  secondary?: { href: string; label: string },
+): string {
   return `
     <div class="inspect-card inspect-card--terminal">
-      <h1 class="inspect-title">${esc(title)}</h1>
+      <h1 class="inspect-title" tabindex="-1">${esc(title)}</h1>
       <p class="term-msg">${esc(msg)}</p>
-      <a href="/" class="btn btn-primary">Back to upload</a>
+      ${terminalActions(href, label, secondary)}
+    </div>
+  `;
+}
+
+function cardLoadError(message: string): string {
+  return `
+    <div class="inspect-card inspect-card--terminal">
+      <h1 class="inspect-title" tabindex="-1">Tideo is unavailable</h1>
+      <p class="term-msg">${esc(message)}</p>
+      <div class="terminal-actions">
+        <button class="btn btn-primary" id="retry-load" type="button">Try again</button>
+        <a href="/history" class="btn btn-ghost">My videos</a>
+      </div>
     </div>
   `;
 }
@@ -633,15 +768,24 @@ function bind(): void {
 
   document.getElementById("cancel-btn")?.addEventListener("click", () => {
     confirmingCancel = true;
+    cancelError = null;
     render();
+    document.getElementById("cancel-confirm-btn")?.focus();
   });
   document.getElementById("cancel-keep-btn")?.addEventListener("click", () => {
     confirmingCancel = false;
+    cancelError = null;
     render();
+    document.getElementById("cancel-btn")?.focus();
   });
   document
     .getElementById("cancel-confirm-btn")
     ?.addEventListener("click", () => void doCancel());
+  document.getElementById("retry-load")?.addEventListener("click", () => {
+    errorAttempts = 0;
+    setView({ tag: "loading" });
+    void load();
+  });
 
   if (view.tag === "done") {
     const base = apiBase();
@@ -774,7 +918,10 @@ export function mount(root: HTMLElement, query: URLSearchParams): () => void {
   presets = [];
   progress = {};
   mode = "live";
+  processingStatus = "queued";
   confirmingCancel = false;
+  cancelling = false;
+  cancelError = null;
   pollTimer = null;
   subsTimer = null;
   unwatch = null;

@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   buildPicker,
   estimateSeconds,
+  formatEstimate,
   LADDER,
   ESTIMATE_RATIOS,
 } from "./presets";
@@ -62,5 +63,15 @@ describe("estimateSeconds", () => {
 
   it("falls back to a conservative ratio for an unknown preset", () => {
     expect(estimateSeconds(["4320p"], 100)).toBeCloseTo(50);
+  });
+});
+
+describe("formatEstimate", () => {
+  it("uses broad, human-readable estimates instead of precise durations", () => {
+    expect(formatEstimate(45)).toBe("under a minute");
+    expect(formatEstimate(60)).toBe("about 1 minute");
+    expect(formatEstimate(86)).toBe("about 2 minutes");
+    expect(formatEstimate(12 * 60)).toBe("about 15 minutes");
+    expect(formatEstimate(75 * 60)).toBe("about 1.5 hours");
   });
 });
