@@ -1,10 +1,15 @@
 from collections.abc import Callable
 
+from celery.exceptions import SoftTimeLimitExceeded
+
 from app.core.config import config
+from app.core.logging import get_logger
 from app.domain.errors import STT_UNAVAILABLE, TRANSCRIBE, TideoError, make_error
 from app.domain.vtt import Segment
+from app.workers.cancellation import CancellationUnavailable
 
 _model = None
+log = get_logger()
 
 
 class SttError(Exception):
@@ -35,8 +40,9 @@ def transcribe(wav_path: str, cancelled: Callable[[], bool] | None = None) -> li
                 raise SttCancelled()
             out.append(Segment(segment.start, segment.end, segment.text))
         return out
-    except SttCancelled:
+    except (SttCancelled, CancellationUnavailable, SoftTimeLimitExceeded):
         raise
     except Exception as exc:
-        error = make_error(STT_UNAVAILABLE, f"local stt failed: {exc}", TRANSCRIBE)
+        log.exception("local_stt_failed")
+        error = make_error(STT_UNAVAILABLE, "transcription service unavailable", TRANSCRIBE)
         raise SttError(error) from exc

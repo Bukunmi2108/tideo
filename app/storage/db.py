@@ -220,12 +220,15 @@ def mark_expired(job_id: str, expired_at) -> bool:
 
 
 def list_stale_sources(cutoff) -> list:
-    """failed/cancelled jobs past the grace window — their source uploads can be reclaimed."""
+    """Terminal jobs past the grace window whose temporary storage can be reclaimed."""
     conn = psycopg2.connect(config.postgres_dsn)
     try:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute("SELECT job_id FROM jobs WHERE status IN ('failed','cancelled') AND finished_at < %s",
-                        (cutoff,))
+            cur.execute(
+                "SELECT job_id, status FROM jobs "
+                "WHERE status IN ('done','failed','cancelled','expired') AND finished_at < %s",
+                (cutoff,),
+            )
             return cur.fetchall()
     finally:
         conn.close()

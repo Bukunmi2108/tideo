@@ -1,7 +1,5 @@
 import json
-import os
 import shutil
-import signal
 import subprocess
 import threading
 import time
@@ -33,28 +31,15 @@ from app.storage import paths
 from app.storage.job_control import transition_status
 from app.storage.state import get_sync_client
 from app.workers.base import TranscodeTask
-from app.workers.cancellation import JobCancelled, is_cancelled
+from app.workers.cancellation import CancellationUnavailable, JobCancelled, is_cancelled
 from app.workers.celery_app import app
 from app.workers.ffmpeg import build_rendition_argv
 from app.workers.ffprobe import SourceMeta
+from app.workers.process import terminate_group
 from app.workers.progress import Throttle, parse_progress_blocks, percent
-from app.workers.retry import backoff_seconds, max_retries_for
+from app.workers.retry import MAX_RETRIES, backoff_seconds, max_retries_for
 
 log = get_logger()
-
-
-def _terminate_group(proc: subprocess.Popen) -> None:
-    """Terminate FFmpeg's process group."""
-    try:
-        pgid = os.getpgid(proc.pid)
-    except ProcessLookupError:
-        return
-    os.killpg(pgid, signal.SIGTERM)
-    try:
-        proc.wait(timeout=3)
-    except subprocess.TimeoutExpired:
-        os.killpg(pgid, signal.SIGKILL)
-        proc.wait()
 
 
 def _store_error(job_id: str, err: TideoError, stderr: str = "") -> None:
@@ -137,19 +122,18 @@ def _encode(argv, *, duration, on_pct, cancelled):
             if now - last_check >= 1.0:               # poll the cancel flag ~1/s
                 last_check = now
                 if cancelled():
-                    _terminate_group(proc)
+                    terminate_group(proc)
                     raise JobCancelled()
         proc.wait()
         if cancelled():
             raise JobCancelled()
-    except (SoftTimeLimitExceeded, JobCancelled):
-        _terminate_group(proc)
+    except BaseException:
+        terminate_group(proc)
         raise
     drain.join(timeout=1)
     return proc.returncode, "\n".join(tail)
 
-@app.task(bind=True, base=TranscodeTask)
-def rendition(self, job_id: str, preset_name: str, src: str, meta: dict) -> dict:
+def _rendition(task, job_id: str, preset_name: str, src: str, meta: dict) -> dict:
     bind_job(job_id)
     if is_cancelled(job_id):
         return {"status": "cancelled", "job_id": job_id}
@@ -175,7 +159,7 @@ def rendition(self, job_id: str, preset_name: str, src: str, meta: dict) -> dict
             if rc != 0:
                 err = classify(rc, stderr, stage=TRANSCODE)
                 log.error("rendition_failed", preset=preset_name, code=err.code, returncode=rc, stderr=stderr)
-                _handle_failure(self, job_id, preset_name, err, stderr)  # retries or raises (tmp cleaned by atomic_dir)
+                _handle_failure(task, job_id, preset_name, err, stderr)  # retries or raises (tmp cleaned by atomic_dir)
             if is_cancelled(job_id):
                 raise JobCancelled()
         if is_cancelled(job_id):
@@ -195,4 +179,16 @@ def rendition(self, job_id: str, preset_name: str, src: str, meta: dict) -> dict
         return {"status": "cancelled", "job_id": job_id}
     except SoftTimeLimitExceeded:
         err = make_error(ENCODE_TIMEOUT, "encode exceeded the time limit", TRANSCODE)
-        _handle_failure(self, job_id, preset_name, err)
+        _handle_failure(task, job_id, preset_name, err)
+
+
+@app.task(bind=True, base=TranscodeTask)
+def rendition(self, job_id: str, preset_name: str, src: str, meta: dict) -> dict:
+    try:
+        return _rendition(self, job_id, preset_name, src, meta)
+    except CancellationUnavailable as exc:
+        raise self.retry(
+            exc=exc,
+            countdown=backoff_seconds(self.request.retries),
+            max_retries=MAX_RETRIES,
+        )

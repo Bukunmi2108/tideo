@@ -1,4 +1,5 @@
-from app.workers.ffprobe import SourceMeta, SOURCE_LIMITS_EXCEEDED, InspectError
+from app.domain.errors import SOURCE_LIMITS_EXCEEDED
+from app.workers.ffprobe import InspectError, SourceMeta
 
 LADDER = [("1080p", 1080), ("720p", 720), ("480p", 480), ("360p", 360)]
 

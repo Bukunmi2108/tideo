@@ -1,15 +1,24 @@
 import pytest
 
 from app.domain import recommend
-from app.workers.ffprobe import SOURCE_LIMITS_EXCEEDED, InspectError, SourceMeta
+from app.domain.errors import SOURCE_LIMITS_EXCEEDED
+from app.workers.ffprobe import InspectError, SourceMeta
 
 
 def meta(**kw) -> SourceMeta:
-    base = dict(
-        container="mov,mp4,m4a,3gp,3g2,mj2", video_codec="h264", audio_codec="aac",
-        width=1920, height=1080, duration=30.0, bitrate=5_000_000, fps=30.0,
-        has_audio=True, video_streams=1, audio_streams=1,
-    )
+    base = {
+        "container": "mov,mp4,m4a,3gp,3g2,mj2",
+        "video_codec": "h264",
+        "audio_codec": "aac",
+        "width": 1920,
+        "height": 1080,
+        "duration": 30.0,
+        "bitrate": 5_000_000,
+        "fps": 30.0,
+        "has_audio": True,
+        "video_streams": 1,
+        "audio_streams": 1,
+    }
     base.update(kw)
     return SourceMeta(**base)
 

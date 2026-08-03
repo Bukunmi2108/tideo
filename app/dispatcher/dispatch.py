@@ -1,4 +1,5 @@
 import json
+import math
 from datetime import UTC, datetime
 from typing import cast
 
@@ -46,6 +47,11 @@ def _new_plan(event_id: str, presets: list[str], subtitles: bool) -> DispatchPla
     )
 
 
+def _transcode_limits(duration: float) -> tuple[int, int]:
+    soft = min(config.transcode_max_seconds, max(30, math.ceil(duration * 3)))
+    return soft, soft + 60
+
+
 def dispatch_job(job_id: str, event_id: str, presets: list[str], subtitles: bool) -> str:
     """Reserve task IDs and submit a job."""
     r = get_sync_client()
@@ -66,11 +72,14 @@ def dispatch_job(job_id: str, event_id: str, presets: list[str], subtitles: bool
 
     src = rec["source_path"]
     meta = json.loads(rec["source_meta"])
+    soft_limit, hard_limit = _transcode_limits(float(meta["duration"]))
     err = fail_job.s(job_id)  # type: ignore[reportFunctionMemberAccess]
     header = group([
         celery_app.signature(RENDITION, args=[job_id, preset, src, meta]).set(
             task_id=task_id,
             link_error=err,
+            soft_time_limit=soft_limit,
+            time_limit=hard_limit,
         )
         for preset, task_id in zip(presets, plan.rendition_ids, strict=True)
     ])
@@ -79,17 +88,18 @@ def dispatch_job(job_id: str, event_id: str, presets: list[str], subtitles: bool
         link_error=err,
     )
 
-    claim_source(r, job_id, "package")
+    consumers = ("package", "transcribe") if plan.transcribe_id else ("package",)
+    claim_source(r, job_id, *consumers)
     chord(header)(callback)
     log.info("job_dispatched", presets=presets, callback_id=plan.callback_id)
 
     if plan.transcribe_id:
         try:
             if r.exists(f"cancel:{job_id}") or r.hget(f"job:{job_id}", "status") == "cancelled":
+                release_source(r, job_id, "transcribe")
                 log.info("transcribe_dispatch_skipped", reason="job_cancelled")
                 return "dispatched"
             r.hset(f"job:{job_id}", mapping={"subtitles": json.dumps({"status": "processing"})})
-            claim_source(r, job_id, "transcribe")
             celery_app.signature(TRANSCRIBE, args=[job_id, src, meta]).set(
                 task_id=plan.transcribe_id,
             ).apply_async()

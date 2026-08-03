@@ -1,5 +1,9 @@
+import math
+
 import pytest
-from app.workers.ffprobe import SOURCE_NO_VIDEO, InspectError, SourceMeta
+
+from app.domain.errors import SOURCE_CORRUPT, SOURCE_NO_VIDEO
+from app.workers.ffprobe import InspectError, SourceMeta
 
 
 def _probe_json(streams, fmt=None):
@@ -60,7 +64,32 @@ def test_missing_bitrate_tolerated():
     assert meta.bitrate is None
 
 
-def test_to_dict_is_json_serializable():
-    import json
+@pytest.mark.parametrize("duration", ["N/A", "nan", "inf", "0", "-1"])
+def test_invalid_duration_is_source_corrupt(duration):
+    with pytest.raises(InspectError) as exc:
+        SourceMeta.from_ffprobe(
+            _probe_json([VIDEO], fmt={"format_name": "mp4", "duration": duration})
+        )
+
+    assert exc.value.code == SOURCE_CORRUPT
+
+
+@pytest.mark.parametrize("field,value", [("width", 0), ("height", -1)])
+def test_invalid_dimensions_are_source_corrupt(field, value):
+    video = {**VIDEO, field: value}
+    with pytest.raises(InspectError) as exc:
+        SourceMeta.from_ffprobe(_probe_json([video]))
+
+    assert exc.value.code == SOURCE_CORRUPT
+
+
+def test_metadata_numbers_are_finite():
     meta = SourceMeta.from_ffprobe(_probe_json([VIDEO, AUDIO]))
-    json.dumps(meta.to_dict())  # must not raise
+    assert math.isfinite(meta.duration)
+    assert not hasattr(meta, "to_dict")
+
+
+def test_unrepresentable_fps_is_ignored():
+    video = {**VIDEO, "r_frame_rate": f"{10**400}/1"}
+
+    assert SourceMeta.from_ffprobe(_probe_json([video])).fps is None

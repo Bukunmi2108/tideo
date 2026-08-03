@@ -1,7 +1,7 @@
 import json
 import shutil
-import subprocess
 from html import escape
+from pathlib import Path
 from typing import cast
 
 from redis.exceptions import RedisError
@@ -17,8 +17,10 @@ from app.storage import paths, terminal_outbox
 from app.storage.job_control import transition_status
 from app.storage.state import get_sync_client
 from app.workers.base import PackageTask
-from app.workers.cancellation import is_cancelled
+from app.workers.cancellation import CancellationUnavailable, is_cancelled
 from app.workers.celery_app import app
+from app.workers.process import run_process
+from app.workers.retry import MAX_RETRIES, backoff_seconds
 from app.workers.source import release_source
 from app.workers.subtitles import refresh_master
 from app.workers.tasks.thumbs import write_poster, write_sprite
@@ -27,17 +29,29 @@ log = get_logger()
 
 
 def _probe_variant(seg_path: str) -> dict:
-    out = subprocess.run(
+    out = run_process(
         ["ffprobe", "-v", "error", "-select_streams", "v:0",
          "-show_entries", "stream=width,height,profile,level", "-of", "json", seg_path],
-        capture_output=True, text=True, check=True,
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=20,
     )
     return json.loads(out.stdout)["streams"][0]
 
 
-def _variant(job_dir: str, preset: str, output_bytes: int, duration: float) -> Variant:
+def _variant(
+    job_dir: str,
+    preset: str,
+    output_bytes: int,
+    duration: float,
+    *,
+    has_audio: bool,
+) -> Variant:
     s = _probe_variant(f"{job_dir}/{preset}/seg_00000.ts")
-    codecs = f"{avc1_codec(s['profile'], int(s['level']))},mp4a.40.2"
+    codecs = avc1_codec(s["profile"], int(s["level"]))
+    if has_audio:
+        codecs += ",mp4a.40.2"
     return Variant(preset, bandwidth(output_bytes, duration), int(s["width"]), int(s["height"]), codecs)
 
 
@@ -51,23 +65,38 @@ def _lowest(presets: list[str]) -> str:
     return max(presets, key=order.index)
 
 
-def _web_mp4(src: str, out: str, *, web_safe: bool, top: str) -> bool:
-    """Build web.mp4 and return whether it was remuxed."""
-    if web_safe:
-        argv = ["ffmpeg", "-nostdin", "-y", "-i", src, "-c", "copy", "-movflags", "+faststart", out]
-    else:
-        p = PRESETS[top]
-        vf = f"scale=w={p.width}:h={p.height}:force_original_aspect_ratio=decrease:force_divisible_by=2"
-        argv = ["ffmpeg", "-nostdin", "-y", "-i", src, "-vf", vf,
-                "-c:v", "libx264", "-preset", config.x264_preset, "-profile:v", p.profile,
-                "-b:v", p.v_bitrate, "-maxrate", p.maxrate, "-bufsize", p.bufsize,
-                "-c:a", "aac", "-b:a", p.a_bitrate, "-movflags", "+faststart", out]
-    subprocess.run(argv, check=True)
+def _web_mp4(
+    src: str,
+    out: Path,
+    *,
+    web_safe: bool,
+    top_playlist: str,
+    cancelled,
+) -> bool:
+    """Build web.mp4 without encoding the source a second time."""
+    media_input = src if web_safe else top_playlist
+    with paths.atomic_path(out) as tmp:
+        run_process(
+            [
+                "ffmpeg",
+                "-nostdin",
+                "-y",
+                "-i",
+                media_input,
+                "-c",
+                "copy",
+                "-movflags",
+                "+faststart",
+                str(tmp),
+            ],
+            check=True,
+            timeout=230,
+            cancelled=cancelled,
+        )
     return web_safe
 
 
-@app.task(base=PackageTask)
-def package(results, job_id: str) -> dict:
+def _package(results, job_id: str) -> dict:
     bind_job(job_id)
     results = results if isinstance(results, list) else [results]
     r = get_sync_client()
@@ -85,27 +114,53 @@ def package(results, job_id: str) -> dict:
         return _cancel_package(r, job_id, job_dir)
 
     renditions = [res for res in results if "preset" in res]
-    variants = [_variant(str(job_dir), res["preset"], res["output_bytes"], duration) for res in renditions]
+    variants = [
+        _variant(
+            str(job_dir),
+            res["preset"],
+            res["output_bytes"],
+            duration,
+            has_audio=bool(meta.get("has_audio")),
+        )
+        for res in renditions
+    ]
 
     top = _highest([v.preset for v in variants])
     if is_cancelled(job_id):
         return _cancel_package(r, job_id, job_dir)
-    remuxed = _web_mp4(cast(str, rec["source_path"]), str(job_dir / "web.mp4"),
-                       web_safe=(rec.get("web_safe") == "true"), top=top)
-    log.info("web_mp4_built", mode="remux" if remuxed else "reencode")
+    remuxed = _web_mp4(
+        cast(str, rec["source_path"]),
+        job_dir / "web.mp4",
+        web_safe=(rec.get("web_safe") == "true"),
+        top_playlist=f"{job_dir}/{top}/index.m3u8",
+        cancelled=lambda: is_cancelled(job_id),
+    )
+    log.info("web_mp4_built", mode="source_remux" if remuxed else "rendition_remux")
 
     low = _lowest([v.preset for v in variants])
     if is_cancelled(job_id):
         return _cancel_package(r, job_id, job_dir)
-    write_poster(job_dir, f"{job_dir}/{top}/index.m3u8", duration)
-    storyboard = write_sprite(job_dir, f"{job_dir}/{low}/index.m3u8", duration, meta.get("fps") or 30.0)
+    write_poster(
+        job_dir,
+        f"{job_dir}/{top}/index.m3u8",
+        duration,
+        cancelled=lambda: is_cancelled(job_id),
+    )
+    storyboard = write_sprite(
+        job_dir,
+        f"{job_dir}/{low}/index.m3u8",
+        duration,
+        meta.get("fps") or 30.0,
+        cancelled=lambda: is_cancelled(job_id),
+    )
 
     if is_cancelled(job_id):
         return _cancel_package(r, job_id, job_dir)
 
     manifest = build_manifest(job_id, duration, variants, web_remuxed=remuxed,
                               created_at=cast(str, rec.get("created_at")), storyboard=storyboard)
-    (job_dir / "manifest.json").write_text(json.dumps(manifest, indent=2))
+    with paths.atomic_path(job_dir / "manifest.json") as tmp:
+        tmp.write_text(json.dumps(manifest, indent=2))
 
     # master last, via the shared writer: includes the subtitles track iff transcription already landed
     # the VTT (it runs alongside the ladder). If it lands later, the transcribe task rewrites master then.
@@ -113,11 +168,12 @@ def package(results, job_id: str) -> dict:
 
     name = escape(cast(str, rec.get("source_filename", "")))  # filename is user input -> escape it
     # "playlist" is relative to /jobs/{id}/player -> resolves to /jobs/{id}/playlist
-    (job_dir / "embed.html").write_text(
-        f'<!-- {name} --><video id="v" controls style="width:100%"></video>'
-        '<script src="https://cdn.jsdelivr.net/npm/hls.js@1"></script>'
-        '<script>var h=new Hls({debug:true});h.loadSource("playlist");h.attachMedia(document.getElementById("v"));</script>'
-    )
+    with paths.atomic_path(job_dir / "embed.html") as tmp:
+        tmp.write_text(
+            f'<!-- {name} --><video id="v" controls style="width:100%"></video>'
+            '<script src="https://cdn.jsdelivr.net/npm/hls.js@1"></script>'
+            '<script>var h=new Hls({debug:true});h.loadSource("playlist");h.attachMedia(document.getElementById("v"));</script>'
+        )
 
     nxt = transition_status(
         r,
@@ -138,6 +194,18 @@ def package(results, job_id: str) -> dict:
     else:
         return _cancel_package(r, job_id, job_dir)
     return {"status": nxt, "job_id": job_id, "master": "master.m3u8"}
+
+
+@app.task(bind=True, base=PackageTask)
+def package(self, results, job_id: str) -> dict:
+    try:
+        return _package(results, job_id)
+    except CancellationUnavailable as exc:
+        raise self.retry(
+            exc=exc,
+            countdown=backoff_seconds(self.request.retries),
+            max_retries=MAX_RETRIES,
+        )
 
 
 def _cancel_package(r, job_id: str, job_dir) -> dict:
