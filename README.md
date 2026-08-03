@@ -6,11 +6,11 @@ player, and optional captions. It's the thing YouTube does in the first minutes 
 as a real distributed pipeline you can run, break, and watch scale.
 
 **[▶ Live](https://tideo.vercel.app/)** &nbsp;·&nbsp;
-[API & docs](https://bukunmi2108-tideo.hf.space/docs) &nbsp;·&nbsp;
+[API & docs](https://tideo-api.duckdns.org/docs) &nbsp;·&nbsp;
 [Source](https://github.com/Bukunmi2108/tideo)
 
-> The live backend runs on an ephemeral Hugging Face Space — outputs reset on restart (~1-day TTL).
-> Upload and watch within a session; shared output links are temporary by design.
+> The live backend runs on the Workspace VPS. Outputs are temporary and expire after the configured
+> retention window.
 
 <p align="center">
   <img src="assets/screenshots/landing.png" width="860" alt="Tideo landing — upload once, stream every screen" />
@@ -65,7 +65,7 @@ Two brokers, on purpose — the project is a deliberate study of distributed-sys
 |---|---|---|
 | `app/` | FastAPI API, Celery tasks per queue, Kafka producer/consumers, dispatcher, storage layer | FastAPI · Celery · Python 3.12 · FFmpeg |
 | `frontend/` | SPA — upload, inspect/commit, library, Netflix-style immersive watch page | Vite · vanilla TypeScript · `hls.js` (only runtime dep) |
-| `deploy/` | HF Space image plus the Workspace VPS Compose topology and exact-revision deploy command | Docker · Compose · Sablier · supervisord |
+| `deploy/` | Workspace VPS Compose topology and exact-revision deploy command | Docker · Compose · Sablier |
 
 ## Repo layout
 
@@ -73,7 +73,7 @@ Two brokers, on purpose — the project is a deliberate study of distributed-sys
 |---|---|
 | `app/` | backend — `api/` routes, `workers/` (inspect/rendition/package/transcribe/cleanup), `dispatcher/`, `domain/` (ladder, errors, state, playlist), `events/` (Kafka), `storage/` (Redis, Postgres, dedupe, pressure) |
 | `frontend/` | Vite vanilla-TS SPA — `router.ts`, `landing.ts`, `upload.ts`, `history.ts`, `job.ts`, `player.ts`, `sprite.ts` |
-| `deploy/` | legacy single-container HF Space and sleep-aware Workspace VPS deployment |
+| `deploy/` | sleep-aware Workspace VPS deployment |
 | `docs/` | `PLAN.md`, phase writeups, ADRs, chaos drills |
 | `fixtures/` · `scripts/` | generated test videos + their build/verify scripts |
 | `tests/` | ~43 pytest files incl. a classified FFmpeg-stderr corpus and chaos drills |
@@ -91,8 +91,7 @@ cd frontend && npm install && npm run dev # :5173, points at the local API
 make fixtures
 ```
 
-Tests: `uv run pytest` (backend) · `npm test` in `frontend/` (vitest). The single-container image that
-runs on Hugging Face lives under `deploy/`.
+Tests: `uv run pytest` (backend) · `npm test` in `frontend/` (vitest).
 
 ## Workspace VPS
 
@@ -106,5 +105,4 @@ Git SHA without overwriting the VPS `.env` file.
 ## Attribution
 
 Built on [FFmpeg](https://ffmpeg.org/), [faster-whisper](https://github.com/SYSTRAN/faster-whisper),
-and [hls.js](https://github.com/video-dev/hls.js). Backend on a Hugging Face Docker Space, frontend on
-Vercel.
+and [hls.js](https://github.com/video-dev/hls.js). Backend on the Workspace VPS, frontend on Vercel.

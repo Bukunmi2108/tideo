@@ -1,5 +1,6 @@
 import signal
 import time
+from datetime import UTC, datetime
 
 import psycopg2
 from confluent_kafka import Consumer, TopicPartition
@@ -9,14 +10,24 @@ from app.core.config import config
 from app.core.logging import bind_job, clear_log_context, configure_logging, get_logger
 from app.dispatcher.handler import BadEvent, parse_event
 from app.events.topics import TOPIC
+from app.storage.state import get_sync_client
 
 log = get_logger()
 _running = True
+AUDIT_HEARTBEAT = "audit:heartbeat"
 
 
 def _stop(*_):
     global _running
     _running = False
+
+
+def _heartbeat() -> None:
+    get_sync_client().set(
+        AUDIT_HEARTBEAT,
+        datetime.now(UTC).isoformat(),
+        ex=config.dispatcher_heartbeat_ttl,
+    )
 
 
 DDL = """
@@ -108,9 +119,15 @@ def run():
     consumer.subscribe([TOPIC])
     poison = 0
     try:
+        _heartbeat()
+        next_heartbeat = time.monotonic() + config.dispatcher_heartbeat_ttl / 3
         while _running:
             clear_log_context()
             msg = consumer.poll(1.0)
+            now = time.monotonic()
+            if now >= next_heartbeat:
+                _heartbeat()
+                next_heartbeat = now + config.dispatcher_heartbeat_ttl / 3
             if msg is None:
                 continue
             if msg.error():
