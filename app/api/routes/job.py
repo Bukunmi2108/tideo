@@ -87,6 +87,8 @@ def _job_summary(row: dict) -> dict:
         "finished_at": _iso(finished),
         "expires_at": _iso(expires_at),
         "poster": f"/jobs/{job_id}/poster" if poster_avail else None,
+        "presets": row.get("presets"),
+        "progress": row.get("progress"),
     }
 
 
@@ -117,6 +119,8 @@ def _redis_job_summary(job_id: str, rec: dict) -> dict:
         "source_duration_s": duration,
         "created_at": _datetime(rec.get("created_at")),
         "finished_at": finished,
+        "presets": json_list(rec, "presets", job_id),
+        "progress": progress_map(rec, job_id) if status in {"queued", "transcoding"} else None,
     }
     return _job_summary(row)
 
@@ -139,6 +143,7 @@ def _response_from_pg(job_id: str, row: dict) -> dict:
     resp = {"job_id": job_id, "status": status, "source_filename": row.get("source_filename")}
     if status == "done":
         resp["results"] = results_view_pg(job_id, row)
+        resp["expires_at"] = _job_summary(row)["expires_at"]
     elif status == "failed":
         resp["error"] = error_view(row)
     return resp
@@ -151,8 +156,10 @@ async def list_jobs(
     limit: int = Query(20, ge=1, le=50),
     offset: int = Query(0, ge=0),
 ):
-    if status is not None and status not in ACTIVE | TERMINAL:
+    status_groups = {"processing": ACTIVE, "ready": {"done"}}
+    if status is not None and status not in ACTIVE | TERMINAL | status_groups.keys():
         raise ApiError(422, "BAD_STATUS", f"unknown status filter: {status}")
+    statuses = status_groups.get(status, {status} if status else ACTIVE | TERMINAL)
 
     r = get_client()
     ids = await r.zrevrange(session_jobs_key(owner_session_hash), 0, -1)
@@ -166,23 +173,26 @@ async def list_jobs(
         if not owns_job(rec, owner_session_hash):
             stale.append(job_id)
             continue
-        if status is None or rec.get("status") == status:
+        if rec.get("status") in statuses:
             items_by_id[job_id] = _redis_job_summary(job_id, rec)
     if stale:
         await r.zrem(session_jobs_key(owner_session_hash), *stale)
 
     target = offset + limit + 1
     rows = []
-    if status is None or status in TERMINAL:
+    terminal_statuses = statuses & TERMINAL
+    if terminal_statuses:
+        db_status = next(iter(terminal_statuses)) if len(terminal_statuses) == 1 else None
         rows = await run_in_threadpool(
             db_list_jobs,
             owner_session_hash=owner_session_hash,
-            status=status,
+            status=db_status,
             limit=target,
             offset=0,
         )
     for row in rows:
-        items_by_id[row["job_id"]] = _job_summary(row)
+        if row["status"] in statuses:
+            items_by_id[row["job_id"]] = _job_summary(row)
     items = sorted(
         items_by_id.values(),
         key=lambda item: (item.get("created_at") or "", item["job_id"]),
@@ -224,6 +234,7 @@ async def get_job(
         resp["presets"] = json_list(rec, "presets", job_id)
     elif status == "done":
         resp["results"] = results_view(job_id, rec)
+        resp["expires_at"] = _redis_job_summary(job_id, rec)["expires_at"]
     elif status == "failed":
         resp["error"] = error_view(rec)
     return resp

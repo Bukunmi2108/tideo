@@ -39,10 +39,23 @@ beforeEach(() => {
 afterEach(() => {
   teardown?.();
   root.remove();
+  vi.useRealTimers();
   vi.clearAllMocks();
 });
 
 describe("history mount", () => {
+  it("shows a useful session header, filters, and an accessible loading state", () => {
+    listMock.mockReturnValue(new Promise(() => {}));
+    teardown = mount(root);
+
+    expect(root.querySelector("h1")?.textContent).toBe("My videos");
+    expect(root.textContent).toContain("this browser session");
+    expect(root.querySelector('.hist-toolbar a[href="/upload"]')).not.toBeNull();
+    expect(root.querySelectorAll(".hist-filter")).toHaveLength(4);
+    expect(root.querySelector('[aria-busy="true"]')).not.toBeNull();
+    expect(root.querySelector(".hero")).toBeNull();
+  });
+
   it("renders a card per job with filename, badge, and a poster image", async () => {
     listMock.mockResolvedValue(
       page([job(), job({ job_id: "j2", source_filename: "two.mov" })]),
@@ -53,7 +66,7 @@ describe("history mount", () => {
       expect(root.querySelectorAll(".hist-card").length).toBe(2),
     );
     expect(root.querySelector(".hist-name")?.textContent).toBe("clip.mp4");
-    expect(root.querySelector(".hist-badge--done")?.textContent).toBe("done");
+    expect(root.querySelector(".hist-badge--done")?.textContent).toBe("Ready");
     expect(root.querySelector("img.hist-poster")?.getAttribute("src")).toMatch(
       /\/jobs\/j1\/poster$/,
     );
@@ -102,6 +115,70 @@ describe("history mount", () => {
       { limit: 24, offset: 1 },
       expect.anything(),
     );
+  });
+
+  it("filters processing jobs through the grouped API filter", async () => {
+    listMock.mockResolvedValueOnce(page([job()]));
+    teardown = mount(root);
+    await vi.waitFor(() => expect(root.querySelector(".hist-grid")).toBeTruthy());
+    listMock.mockResolvedValueOnce(
+      page([job({ status: "transcoding", progress: { "720p": 45 } })]),
+    );
+
+    (root.querySelector('[data-filter="processing"]') as HTMLButtonElement).click();
+
+    await vi.waitFor(() =>
+      expect(listMock).toHaveBeenLastCalledWith(
+        { limit: 24, offset: 0, status: "processing" },
+        expect.anything(),
+      ),
+    );
+    expect(root.querySelector('[data-filter="processing"]')?.getAttribute("aria-pressed")).toBe("true");
+    expect(root.querySelector(".hist-progress")?.textContent).toContain("45%");
+    expect(root.querySelector("[role=progressbar]")?.getAttribute("aria-valuenow")).toBe("45");
+  });
+
+  it("keeps existing cards visible when pagination fails and retries in place", async () => {
+    listMock.mockResolvedValueOnce(page([job({ job_id: "a" })], true));
+    teardown = mount(root);
+    await vi.waitFor(() => expect(root.querySelector(".hist-more")).toBeTruthy());
+    listMock.mockRejectedValueOnce(new Error("offline"));
+
+    (root.querySelector(".hist-more") as HTMLButtonElement).click();
+
+    await vi.waitFor(() => expect(root.querySelector(".hist-page-error")).toBeTruthy());
+    expect(root.querySelectorAll(".hist-card")).toHaveLength(1);
+    expect(root.querySelector(".hist-name")?.textContent).toBe("clip.mp4");
+    listMock.mockResolvedValueOnce(page([job({ job_id: "b" })]));
+    (root.querySelector(".hist-page-retry") as HTMLButtonElement).click();
+    await vi.waitFor(() => expect(root.querySelectorAll(".hist-card")).toHaveLength(2));
+  });
+
+  it("offers a retry after a full-page loading error", async () => {
+    listMock.mockRejectedValueOnce(new Error("offline"));
+    teardown = mount(root);
+    await vi.waitFor(() => expect(root.querySelector(".hist-load-error")).toBeTruthy());
+    expect(root.querySelector(".hist-retry")).not.toBeNull();
+
+    listMock.mockResolvedValueOnce(page([job()]));
+    (root.querySelector(".hist-retry") as HTMLButtonElement).click();
+    await vi.waitFor(() => expect(root.querySelector(".hist-card")).toBeTruthy());
+  });
+
+  it("refreshes visible processing jobs and stops once they are ready", async () => {
+    vi.useFakeTimers();
+    listMock.mockResolvedValueOnce(
+      page([job({ status: "transcoding", progress: { "720p": 20 } })]),
+    );
+    teardown = mount(root);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(root.querySelector(".hist-progress")?.textContent).toContain("20%");
+
+    listMock.mockResolvedValueOnce(page([job({ status: "done" })]));
+    await vi.advanceTimersByTimeAsync(5000);
+
+    expect(root.querySelector(".hist-badge--done")?.textContent).toBe("Ready");
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("does not throw if torn down before the fetch resolves", async () => {

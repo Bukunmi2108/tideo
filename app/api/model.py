@@ -72,6 +72,7 @@ class JobResponse(BaseModel):
     progress: dict[str, float] | None = None
     results: JobResults | None = None
     error: JobError | None = None
+    expires_at: str | None = None
 
 
 def _malformed(field: str, job_id: str) -> None:
@@ -211,6 +212,8 @@ class JobSummary(BaseModel):
     finished_at: str | None = None
     expires_at: str | None = None
     poster: str | None = None
+    presets: list[str] | None = None
+    progress: dict[str, float] | None = None
 
 
 class JobListResponse(BaseModel):

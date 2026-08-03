@@ -56,7 +56,12 @@ export function playLoop(el: HTMLElement, sb: Storyboard, fps = 6): Loop {
 
 // Lazy-load a job's storyboard, caching the promise so repeated hovers don't refetch.
 const cache = new Map<string, Promise<Storyboard | null>>();
-export function loadStoryboard(jobId: string): Promise<Storyboard | null> {
+export function loadStoryboard(
+  jobId: string,
+  signal?: AbortSignal,
+): Promise<Storyboard | null> {
+  if (signal)
+    return getStoryboard(jobId, signal).catch(() => null);
   let p = cache.get(jobId);
   if (!p) {
     p = getStoryboard(jobId).catch(() => null); // 404 on pre-storyboard jobs → graceful no-scrub

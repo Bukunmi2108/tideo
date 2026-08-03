@@ -1,5 +1,11 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { getJob, getStoryboard, postTranscode, ApiError } from "./api";
+import {
+  ApiError,
+  getJob,
+  getStoryboard,
+  listJobs,
+  postTranscode,
+} from "./api";
 import { SESSION_HEADER } from "./session";
 
 function mockFetch(body: unknown, status = 200) {
@@ -175,6 +181,29 @@ describe("public artifact metadata", () => {
     await getStoryboard("j1");
 
     expect(new Headers(capturedInit?.headers).has(SESSION_HEADER)).toBe(false);
+  });
+});
+
+describe("listJobs", () => {
+  it("sends grouped status and pagination parameters with the owner header", async () => {
+    let capturedUrl = "";
+    let capturedInit: RequestInit | undefined;
+    vi.stubGlobal("fetch", async (url: string, init?: RequestInit) => {
+      capturedUrl = url;
+      capturedInit = init;
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ items: [], limit: 24, offset: 24, has_more: false }),
+      };
+    });
+
+    await listJobs({ status: "processing", limit: 24, offset: 24 });
+
+    expect(capturedUrl).toContain("status=processing");
+    expect(capturedUrl).toContain("limit=24");
+    expect(capturedUrl).toContain("offset=24");
+    expect(new Headers(capturedInit?.headers).get(SESSION_HEADER)).toMatch(/^v1\./);
   });
 });
 

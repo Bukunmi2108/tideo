@@ -1,14 +1,11 @@
 import {
   getJob,
-  getManifest,
   postTranscode,
   postCancel,
   ApiError,
-  apiBase,
   type JobResponse,
   type JobError,
   type JobResults,
-  type Manifest,
 } from "./api";
 import { watch, type StateFrame } from "./live";
 import {
@@ -17,11 +14,10 @@ import {
   friendlyContainer,
   readinessExplanation,
 } from "./job-copy";
-import { mountPlayer, type PlayerHandle } from "./player";
 import {
   esc,
-  humanDuration,
   humanBitrate,
+  humanDuration,
   siteFooter,
   siteHeader,
 } from "./render";
@@ -31,7 +27,11 @@ import {
   formatEstimate,
   type PickerRow,
 } from "./presets";
-import { loadStoryboard, spriteUrl } from "./sprite";
+import {
+  mountCompletedResult,
+  renderCompletedResult,
+  type CompletedResultHandle,
+} from "./results";
 
 // Phase 5.4/5.5 — inspect/commit, then live progress and the player.
 
@@ -40,7 +40,7 @@ type View =
   | { tag: "inspecting" }
   | { tag: "awaiting"; job: JobResponse }
   | { tag: "progress" }
-  | { tag: "done"; results: JobResults }
+  | { tag: "done"; results: JobResults; expiresAt?: string | null }
   | { tag: "failed"; error?: JobError }
   | { tag: "cancelled" }
   | { tag: "expired" }
@@ -73,7 +73,7 @@ let cancelError: string | null = null;
 let pollTimer: ReturnType<typeof setTimeout> | null = null;
 let subsTimer: ReturnType<typeof setTimeout> | null = null;
 let unwatch: (() => void) | null = null;
-let player: PlayerHandle | null = null;
+let completedResult: CompletedResultHandle | null = null;
 let gen = 0; // invalidates in-flight load()s when the view is superseded
 let errorAttempts = 0;
 const MAX_ERROR_RETRIES = 5;
@@ -88,8 +88,7 @@ function cancelPoll(): void {
   gen++;
 }
 
-// Captions routinely outlive the ladder. When `done` arrives with subtitles still processing, poll until
-// the result is terminal, then re-render so the player remounts and picks up the rewritten master (CC button).
+// Captions routinely outlive the ladder. Poll their status without rebuilding the completed-result page.
 function stopSubsWatch(): void {
   if (subsTimer) clearTimeout(subsTimer);
   subsTimer = null;
@@ -111,7 +110,13 @@ function watchSubtitles(): void {
         subs &&
         subs.status !== "processing"
       ) {
-        setView({ tag: "done", results: job.results });
+        view = {
+          tag: "done",
+          results: job.results,
+          expiresAt: job.expires_at,
+        };
+        completedResult?.updateSubtitles(subs);
+        stopSubsWatch();
         return;
       }
     } catch {
@@ -169,7 +174,12 @@ function route(job: JobResponse): void {
       startProgress(job);
       break;
     case "done":
-      if (job.results) setView({ tag: "done", results: job.results });
+      if (job.results)
+        setView({
+          tag: "done",
+          results: job.results,
+          expiresAt: job.expires_at,
+        });
       else
         setView({
           tag: "error",
@@ -338,9 +348,9 @@ function setView(next: View): void {
 }
 
 function render(): void {
-  if (player) {
-    player.destroy();
-    player = null;
+  if (completedResult) {
+    completedResult.destroy();
+    completedResult = null;
   }
   appEl.innerHTML = `
     ${siteHeader()}
@@ -348,8 +358,13 @@ function render(): void {
     ${siteFooter()}
   `;
   bind();
-  if (view.tag === "done") {
-    mountDonePlayer(view.results);
+  if (view.tag === "done" && jobId) {
+    completedResult = mountCompletedResult(appEl, {
+      jobId,
+      title: jobTitle || jobId,
+      results: view.results,
+      expiresAt: view.expiresAt,
+    });
     if (view.results.subtitles?.status === "processing") watchSubtitles();
     else stopSubsWatch();
   } else {
@@ -367,7 +382,12 @@ function card(): string {
     case "progress":
       return cardProgress();
     case "done":
-      return cardDone(view.results);
+      return renderCompletedResult({
+        jobId: jobId ?? "",
+        title: jobTitle || jobId || "Your video",
+        results: view.results,
+        expiresAt: view.expiresAt,
+      });
     case "failed":
       return cardFailed(view.error);
     case "cancelled":
@@ -601,95 +621,6 @@ function updateBars(): void {
   }
 }
 
-function captionNote(results: JobResults): string {
-  const subs = results.subtitles;
-  if (!subs) return "";
-  const text =
-    subs.status === "processing"
-      ? "Captions: generating…"
-      : subs.status === "ready"
-        ? "Captions ready. Toggle CC in the player."
-        : subs.status === "none"
-          ? "Captions: no speech to transcribe"
-          : "Captions: unavailable";
-  return `<p class="caption-note caption-${subs.status}">${text}</p>`;
-}
-
-function cardDone(results: JobResults): string {
-  const base = apiBase();
-  const title = esc(jobTitle || jobId || "your video");
-  const n = results.presets?.length ?? 0;
-  const meta = [
-    results.duration != null ? humanDuration(results.duration) : "",
-    n ? `${n} rendition${n === 1 ? "" : "s"}` : "",
-    "adaptive HLS",
-  ]
-    .filter(Boolean)
-    .join("  ·  ");
-  return `
-    <div class="watch">
-      <section class="watch-stage">
-        <div class="player-mount" id="player-mount"></div>
-        <div class="watch-overlay">
-          <p class="watch-eyebrow">Now playing</p>
-          <h1 class="watch-title">${title}</h1>
-        </div>
-        <button class="watch-scroll" id="watch-scroll" type="button" aria-label="See details">details ↓</button>
-      </section>
-      <section class="watch-detail" id="watch-detail">
-        <div class="watch-detail-inner">
-          <div class="watch-head">
-            <div>
-              <h2 class="watch-name">${title}</h2>
-              <p class="watch-meta">${esc(meta)}<span class="watch-chip">ready</span></p>
-            </div>
-            <div class="watch-actions">
-              <a class="btn btn-primary" href="${base + results.web_mp4}" download>Download MP4</a>
-              <button class="btn btn-ghost" id="share-player" type="button">Share video</button>
-              <button class="btn btn-ghost" id="copy-master" type="button">Copy stream URL</button>
-              <a class="btn btn-ghost" href="/upload">New upload</a>
-            </div>
-          </div>
-          ${captionNote(results)}
-          <div class="ladder" id="ladder">
-            <div class="ladder-head">Rendition ladder</div>
-            <div class="ladder-rows" id="ladder-rows"><div class="ladder-loading">reading manifest…</div></div>
-          </div>
-          <details class="disclosure embed-block">
-            <summary>Embed snippet</summary>
-            <pre class="embed-code">${esc(embedSnippet(base + results.playlist))}</pre>
-            <button class="btn btn-ghost" id="copy-embed" type="button">Copy snippet</button>
-          </details>
-        </div>
-      </section>
-    </div>
-  `;
-}
-
-function renderLadder(m: Manifest): string {
-  const rungs = [...m.renditions].sort((a, b) => b.bandwidth - a.bandwidth);
-  const max = Math.max(1, ...rungs.map((r) => r.bandwidth));
-  return rungs
-    .map((r) => {
-      const pct = Math.round((r.bandwidth / max) * 100);
-      const vcodec = r.codecs.split(",")[0];
-      return `<div class="rung">
-        <span class="rung-label">${esc(r.preset)}</span>
-        <span class="rung-res">${esc(r.resolution.replace("x", "×"))}</span>
-        <div class="rung-bar"><div class="rung-fill" style="width:${pct}%"></div></div>
-        <span class="rung-rate">${humanBitrate(r.bandwidth)}</span>
-        <span class="rung-codec">${esc(vcodec)}</span>
-      </div>`;
-    })
-    .join("");
-}
-
-function embedSnippet(playlistUrl: string): string {
-  return `<video id="v" controls style="width:100%"></video>
-<script src="https://cdn.jsdelivr.net/npm/hls.js@1"></script>
-<script>var h=new Hls();h.loadSource(${JSON.stringify(playlistUrl)});h.attachMedia(document.getElementById("v"));</script>`;
-}
-
 function cardFailed(error?: JobError): string {
   const inspecting = error?.stage === "inspect";
   const title = inspecting
@@ -786,110 +717,6 @@ function bind(): void {
     setView({ tag: "loading" });
     void load();
   });
-
-  if (view.tag === "done") {
-    const base = apiBase();
-    document
-      .getElementById("share-player")
-      ?.addEventListener("click", (e) =>
-        void shareVideo(
-          new URL(
-            base + (view as Extract<View, { tag: "done" }>).results.player,
-            window.location.href,
-          ).href,
-          jobTitle || "Tideo video",
-          e.currentTarget as HTMLElement,
-        ),
-      );
-    document
-      .getElementById("copy-master")
-      ?.addEventListener("click", (e) =>
-        copyText(
-          base + (view as Extract<View, { tag: "done" }>).results.playlist,
-          e.currentTarget as HTMLElement,
-        ),
-      );
-    document
-      .getElementById("copy-embed")
-      ?.addEventListener("click", (e) =>
-        copyText(
-          embedSnippet(
-            base + (view as Extract<View, { tag: "done" }>).results.playlist,
-          ),
-          e.currentTarget as HTMLElement,
-        ),
-      );
-  }
-}
-
-function mountDonePlayer(results: JobResults): void {
-  const mount = document.getElementById("player-mount");
-  if (!mount || !jobId) return;
-  document
-    .getElementById("watch-scroll")
-    ?.addEventListener("click", () =>
-      document
-        .getElementById("watch-detail")
-        ?.scrollIntoView({ behavior: "smooth", block: "start" }),
-    );
-  const base = apiBase();
-  const id = jobId;
-  const myGen = gen;
-  // fetch the sprite storyboard first so the player mounts with seek-scrub wired; then the ladder.
-  void loadStoryboard(id).then((sb) => {
-    if (myGen !== gen) return;
-    mount.classList.add("player--stage");
-    player = mountPlayer(mount, {
-      playlist: base + results.playlist,
-      poster: base + results.poster,
-      storyboard: sb,
-      spriteUrl: spriteUrl(id),
-    });
-  });
-  void getManifest(id)
-    .then((m) => {
-      if (myGen !== gen) return;
-      const rows = document.getElementById("ladder-rows");
-      if (rows) rows.innerHTML = renderLadder(m);
-    })
-    .catch(() => {
-      const ladder = document.getElementById("ladder");
-      if (ladder) ladder.remove(); // pre-manifest job — drop the panel rather than show a stub
-    });
-}
-
-async function shareVideo(
-  url: string,
-  title: string,
-  btn: HTMLElement,
-): Promise<void> {
-  if (typeof navigator.share === "function") {
-    try {
-      await navigator.share({ title, url });
-      return;
-    } catch (error) {
-      if (error instanceof DOMException && error.name === "AbortError") return;
-      // A failed native share still has a useful clipboard fallback.
-    }
-  }
-  await copyText(url, btn, "Link copied!");
-}
-
-async function copyText(
-  text: string,
-  btn: HTMLElement,
-  success = "Copied!",
-): Promise<void> {
-  const prev = btn.textContent;
-  try {
-    await navigator.clipboard.writeText(text);
-    btn.textContent = success;
-  } catch {
-    btn.textContent = "Copy failed. Press ⌘/Ctrl-C"; // clipboard blocked (insecure ctx / denied)
-  }
-  setTimeout(() => {
-    btn.textContent = prev;
-  }, 1600);
 }
 
 // Targeted update so toggling a checkbox doesn't re-render the picker and drop focus.
@@ -925,7 +752,7 @@ export function mount(root: HTMLElement, query: URLSearchParams): () => void {
   pollTimer = null;
   subsTimer = null;
   unwatch = null;
-  player = null;
+  completedResult = null;
   errorAttempts = 0;
   // gen is NOT reset — it stays monotonic across mounts so a stale in-flight load() can't write into a remount's DOM
 
@@ -933,9 +760,9 @@ export function mount(root: HTMLElement, query: URLSearchParams): () => void {
 
   return () => {
     cancelPoll();
-    if (player) {
-      player.destroy();
-      player = null;
+    if (completedResult) {
+      completedResult.destroy();
+      completedResult = null;
     }
   };
 }

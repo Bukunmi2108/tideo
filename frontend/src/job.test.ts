@@ -374,6 +374,9 @@ describe("completed-job sharing", () => {
         "https://api.example.test/jobs/j1/player",
       ),
     );
-    expect(button.textContent).toBe("Link copied!");
+    expect(button.textContent).toContain("Share video");
+    expect(root.querySelector(".copy-feedback")?.textContent).toBe(
+      "Share link copied.",
+    );
   });
 });

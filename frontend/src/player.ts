@@ -1,246 +1,385 @@
 import Hls from "hls.js";
+import type { Storyboard } from "./api";
+import { icon } from "./icons";
 import { esc, humanDuration } from "./render";
 import { applySprite, showTile, tileForFraction } from "./sprite";
-import type { Storyboard } from "./api";
-
-// hls.js player with custom chrome. mount() expects origin-correct (absolute)
-// URLs so the playlist's relative segment refs resolve against the API origin.
 
 export interface PlayerHandle {
   destroy(): void;
+  reload(): void;
 }
 
 interface Level {
-  level: number; // -1 = auto
+  level: number;
   label: string;
 }
 
+interface PlayerOptions {
+  playlist: string;
+  poster?: string;
+  storyboard?: Storyboard | null;
+  spriteUrl?: string;
+}
+
+const CONTROL_TIMEOUT = 2600;
+
+/** Mount Tideo's HLS player. The video never starts without an explicit user action. */
 export function mountPlayer(
   container: HTMLElement,
-  opts: {
-    playlist: string;
-    poster?: string;
-    storyboard?: Storyboard | null;
-    spriteUrl?: string;
-  },
+  opts: PlayerOptions,
 ): PlayerHandle {
-  container.classList.add("player");
+  container.classList.add("player", "player--controls-visible");
   container.innerHTML = `
-    <video class="player-video" playsinline ${opts.poster ? `poster="${esc(opts.poster)}"` : ""}></video>
-    <div class="error-message player-error" role="alert" hidden></div>
+    <video class="player-video" playsinline tabindex="0" ${opts.poster ? `poster="${esc(opts.poster)}"` : ""}></video>
+    <button class="pl-center-play" type="button" aria-label="Play video">${icon("play")}</button>
+    <div class="player-error" role="alert" hidden>
+      <p class="player-error-copy"></p>
+      <button class="btn btn-ghost player-retry" type="button">${icon("retry")} Retry playback</button>
+    </div>
     <div class="pl-preview" hidden><div class="pl-preview-img"></div><span class="pl-preview-time">0:00</span></div>
     <div class="player-chrome">
-      <button class="pl-btn pl-play" aria-label="Play">▶</button>
+      <button class="pl-btn pl-play" type="button" aria-label="Play">${icon("play")}</button>
       <input class="pl-seek" type="range" min="0" max="1000" value="0" aria-label="Seek" />
       <span class="pl-time">0:00 / 0:00</span>
-      <input class="pl-vol" type="range" min="0" max="100" value="100" aria-label="Volume" />
-      <div class="pl-quality">
-        <button class="pl-btn pl-quality-btn" aria-haspopup="true" aria-expanded="false">Auto</button>
-        <ul class="pl-quality-menu" role="menu" hidden></ul>
+      <div class="pl-volume">
+        <button class="pl-btn pl-mute" type="button" aria-label="Mute">${icon("speaker")}</button>
+        <input class="pl-vol" type="range" min="0" max="100" value="100" aria-label="Volume" />
       </div>
-      <button class="pl-btn pl-cc" aria-label="Subtitles" aria-pressed="false" hidden>CC</button>
-      <button class="pl-btn pl-full" aria-label="Fullscreen">⛶</button>
+      <label class="pl-quality">
+        <span class="sr-only">Playback quality</span>
+        <select class="pl-quality-select" aria-label="Playback quality"><option value="-1">Auto</option></select>
+      </label>
+      <button class="pl-btn pl-cc" type="button" aria-label="Captions" aria-pressed="false" hidden>${icon("captions")}</button>
+      <button class="pl-btn pl-full" type="button" aria-label="Enter fullscreen">${icon("fullscreen")}</button>
     </div>
   `;
 
   const video = container.querySelector<HTMLVideoElement>(".player-video")!;
+  const centerPlay = container.querySelector<HTMLButtonElement>(".pl-center-play")!;
   const playBtn = container.querySelector<HTMLButtonElement>(".pl-play")!;
   const seek = container.querySelector<HTMLInputElement>(".pl-seek")!;
   const timeEl = container.querySelector<HTMLSpanElement>(".pl-time")!;
-  const vol = container.querySelector<HTMLInputElement>(".pl-vol")!;
-  const qualityWrap = container.querySelector<HTMLDivElement>(".pl-quality")!;
-  const qualityBtn =
-    container.querySelector<HTMLButtonElement>(".pl-quality-btn")!;
-  const qualityMenu =
-    container.querySelector<HTMLUListElement>(".pl-quality-menu")!;
-  const ccBtn = container.querySelector<HTMLButtonElement>(".pl-cc")!;
-  const fullBtn = container.querySelector<HTMLButtonElement>(".pl-full")!;
-  const errEl = container.querySelector<HTMLDivElement>(".player-error")!;
+  const volumeWrap = container.querySelector<HTMLDivElement>(".pl-volume")!;
+  const muteBtn = container.querySelector<HTMLButtonElement>(".pl-mute")!;
+  const volume = container.querySelector<HTMLInputElement>(".pl-vol")!;
+  const quality = container.querySelector<HTMLSelectElement>(".pl-quality-select")!;
+  const qualityWrap = container.querySelector<HTMLElement>(".pl-quality")!;
+  const captions = container.querySelector<HTMLButtonElement>(".pl-cc")!;
+  const fullscreen = container.querySelector<HTMLButtonElement>(".pl-full")!;
+  const error = container.querySelector<HTMLDivElement>(".player-error")!;
+  const errorCopy = container.querySelector<HTMLElement>(".player-error-copy")!;
+  const retry = container.querySelector<HTMLButtonElement>(".player-retry")!;
   const preview = container.querySelector<HTMLDivElement>(".pl-preview")!;
-  const previewImg =
-    container.querySelector<HTMLDivElement>(".pl-preview-img")!;
-  const previewTime =
-    container.querySelector<HTMLSpanElement>(".pl-preview-time")!;
+  const previewImg = container.querySelector<HTMLDivElement>(".pl-preview-img")!;
+  const previewTime = container.querySelector<HTMLSpanElement>(".pl-preview-time")!;
 
+  const events = new AbortController();
   let hls: Hls | null = null;
-  let levels: Level[] = [];
+  let levels: Level[] = [{ level: -1, label: "Auto" }];
+  let controlsTimer: number | null = null;
   let seeking = false;
+  let destroyed = false;
 
-  // ---- seek storyboard: hover the scrubber to see the frame, from Tideo's sprite sheet ----
-  const sb = opts.storyboard;
-  if (sb && opts.spriteUrl) {
-    applySprite(previewImg, sb, opts.spriteUrl);
-    previewImg.style.aspectRatio = `${sb.tile_w} / ${sb.tile_h}`;
-    const dur = () =>
-      Number.isFinite(video.duration) && video.duration > 0
-        ? video.duration
-        : sb.interval * sb.tiles;
-    seek.addEventListener("pointermove", (e) => {
-      const r = seek.getBoundingClientRect();
-      const f = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width));
-      showTile(previewImg, sb, tileForFraction(sb, f));
-      previewTime.textContent = humanDuration(f * dur());
+  function listen(
+    target: EventTarget,
+    type: string,
+    listener: EventListener,
+  ): void {
+    target.addEventListener(type, listener, { signal: events.signal });
+  }
+
+  function clearControlsTimer(): void {
+    if (controlsTimer !== null) window.clearTimeout(controlsTimer);
+    controlsTimer = null;
+  }
+
+  function showControls(keepVisible = false): void {
+    clearControlsTimer();
+    container.classList.add("player--controls-visible");
+    if (!keepVisible && !video.paused && error.hidden) {
+      controlsTimer = window.setTimeout(() => {
+        if (!container.contains(document.activeElement))
+          container.classList.remove("player--controls-visible");
+      }, CONTROL_TIMEOUT);
+    }
+  }
+
+  function showError(message: string): void {
+    clearControlsTimer();
+    errorCopy.textContent = message;
+    error.hidden = false;
+    container.classList.add("player--controls-visible");
+  }
+
+  function hideError(): void {
+    error.hidden = true;
+    errorCopy.textContent = "";
+  }
+
+  function renderLevels(): void {
+    const selected = quality.value || "-1";
+    quality.innerHTML = levels
+      .map((item) => `<option value="${item.level}">${esc(item.label)}</option>`)
+      .join("");
+    quality.value = levels.some((item) => String(item.level) === selected)
+      ? selected
+      : "-1";
+  }
+
+  function nativeTracks(): TextTrack[] {
+    return Array.from(video.textTracks ?? []);
+  }
+
+  function syncCaptions(): void {
+    const hlsTracks = hls?.subtitleTracks ?? [];
+    const tracks = nativeTracks();
+    const hasCaptions = hlsTracks.length > 0 || tracks.length > 0;
+    captions.hidden = !hasCaptions;
+    if (!hasCaptions) return;
+    const enabled = hls
+      ? hls.subtitleTrack >= 0
+      : tracks.some((track) => track.mode === "showing");
+    captions.setAttribute("aria-pressed", String(enabled));
+    captions.classList.toggle("pl-cc-on", enabled);
+  }
+
+  function toggleCaptions(): void {
+    if (hls && hls.subtitleTracks.length > 0) {
+      const enabled = hls.subtitleTrack >= 0;
+      hls.subtitleDisplay = !enabled;
+      hls.subtitleTrack = enabled ? -1 : 0;
+    } else {
+      const tracks = nativeTracks();
+      const enabled = tracks.some((track) => track.mode === "showing");
+      tracks.forEach((track, index) => {
+        track.mode = !enabled && index === 0 ? "showing" : "disabled";
+      });
+    }
+    syncCaptions();
+  }
+
+  function syncPlay(): void {
+    const paused = video.paused;
+    playBtn.innerHTML = icon(paused ? "play" : "pause");
+    playBtn.setAttribute("aria-label", paused ? "Play" : "Pause");
+    centerPlay.hidden = !paused;
+    container.classList.toggle("player--playing", !paused);
+    showControls(paused);
+  }
+
+  function syncVolume(): void {
+    const muted = video.muted || video.volume === 0;
+    muteBtn.innerHTML = icon(muted ? "muted" : "speaker");
+    muteBtn.setAttribute("aria-label", muted ? "Unmute" : "Mute");
+    muteBtn.setAttribute("aria-pressed", String(muted));
+    if (!video.muted) volume.value = String(Math.round(video.volume * 100));
+  }
+
+  function syncTime(): void {
+    if (!seeking && Number.isFinite(video.duration) && video.duration > 0)
+      seek.value = String((video.currentTime / video.duration) * 1000);
+    timeEl.textContent = `${humanDuration(video.currentTime)} / ${humanDuration(video.duration)}`;
+  }
+
+  async function togglePlayback(): Promise<void> {
+    try {
+      if (video.paused) await video.play();
+      else video.pause();
+    } catch {
+      showError("Playback could not start. Check your connection and try again.");
+    }
+  }
+
+  function attachTransport(): void {
+    hls?.destroy();
+    hls = null;
+    hideError();
+    if (Hls.isSupported()) {
+      const instance = new Hls({ enableWorker: true });
+      hls = instance;
+      let recoveryAttempts = 0;
+      instance.loadSource(opts.playlist);
+      instance.attachMedia(video);
+      instance.on(Hls.Events.MANIFEST_PARSED, () => {
+        if (destroyed || hls !== instance) return;
+        levels = [
+          { level: -1, label: "Auto" },
+          ...instance.levels.map((level, index) => ({
+            level: index,
+            label: `${level.height}p`,
+          })),
+        ];
+        instance.subtitleTrack = -1;
+        instance.subtitleDisplay = false;
+        renderLevels();
+        syncCaptions();
+      });
+      instance.on(Hls.Events.SUBTITLE_TRACKS_UPDATED, syncCaptions);
+      instance.on(Hls.Events.ERROR, (_event, data) => {
+        if (!data.fatal || hls !== instance) return;
+        if (
+          recoveryAttempts < 3 &&
+          data.type === Hls.ErrorTypes.NETWORK_ERROR
+        ) {
+          recoveryAttempts += 1;
+          instance.startLoad();
+        } else if (
+          recoveryAttempts < 3 &&
+          data.type === Hls.ErrorTypes.MEDIA_ERROR
+        ) {
+          recoveryAttempts += 1;
+          instance.recoverMediaError();
+        } else {
+          instance.destroy();
+          hls = null;
+          showError("This stream is unavailable or may have expired.");
+        }
+      });
+    } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
+      video.src = opts.playlist;
+      qualityWrap.hidden = true;
+    } else {
+      qualityWrap.hidden = true;
+      showError("This browser can’t play HLS streams.");
+    }
+  }
+
+  const storyboard = opts.storyboard;
+  if (storyboard && opts.spriteUrl) {
+    applySprite(previewImg, storyboard, opts.spriteUrl);
+    previewImg.style.aspectRatio = `${storyboard.tile_w} / ${storyboard.tile_h}`;
+    listen(seek, "pointermove", ((event: PointerEvent) => {
+      const rect = seek.getBoundingClientRect();
+      if (rect.width === 0) return;
+      const fraction = Math.max(
+        0,
+        Math.min(1, (event.clientX - rect.left) / rect.width),
+      );
+      showTile(previewImg, storyboard, tileForFraction(storyboard, fraction));
+      const duration =
+        Number.isFinite(video.duration) && video.duration > 0
+          ? video.duration
+          : storyboard.interval * storyboard.tiles;
+      previewTime.textContent = humanDuration(fraction * duration);
       const half = preview.offsetWidth / 2;
-      preview.style.left = `${Math.max(half + 8, Math.min(r.width - half - 8, e.clientX - r.left))}px`;
+      preview.style.left = `${Math.max(half + 8, Math.min(rect.width - half - 8, event.clientX - rect.left))}px`;
       preview.hidden = false;
-    });
-    seek.addEventListener("pointerleave", () => {
+    }) as EventListener);
+    listen(seek, "pointerleave", () => {
       preview.hidden = true;
     });
   }
 
-  function showError(msg: string): void {
-    errEl.textContent = msg;
-    errEl.hidden = false;
-  }
-
-  // ---- subtitles (CC) ----
-  // hls.js surfaces the master's SUBTITLES track once parsed. Default off; the CC button toggles it.
-  // When transcription lands after the player mounts, the track shows up on the next track-update.
-  function syncCc(): void {
-    const has = !!hls && hls.subtitleTracks.length > 0;
-    ccBtn.hidden = !has;
-    if (!has) return;
-    const on = hls!.subtitleTrack >= 0;
-    ccBtn.setAttribute("aria-pressed", String(on));
-    ccBtn.classList.toggle("pl-cc-on", on);
-  }
-  ccBtn.addEventListener("click", () => {
-    if (!hls || hls.subtitleTracks.length === 0) return;
-    const on = hls.subtitleTrack >= 0;
-    hls.subtitleDisplay = !on;
-    hls.subtitleTrack = on ? -1 : 0;
-    syncCc();
+  listen(playBtn, "click", () => void togglePlayback());
+  listen(centerPlay, "click", () => void togglePlayback());
+  listen(video, "click", () => void togglePlayback());
+  listen(video, "play", syncPlay);
+  listen(video, "pause", syncPlay);
+  listen(video, "ended", syncPlay);
+  listen(video, "timeupdate", syncTime);
+  listen(video, "loadedmetadata", () => {
+    syncTime();
+    syncCaptions();
+    const audioTracks = (
+      video as HTMLVideoElement & { audioTracks?: { length: number } }
+    ).audioTracks;
+    if (audioTracks && audioTracks.length === 0) volumeWrap.hidden = true;
   });
-
-  // ---- transport ----
-  if (Hls.isSupported()) {
-    hls = new Hls({ enableWorker: true });
-    hls.loadSource(opts.playlist);
-    hls.attachMedia(video);
-    hls.on(Hls.Events.MANIFEST_PARSED, () => {
-      levels = [
-        { level: -1, label: "Auto" },
-        ...hls!.levels.map((l, i) => ({ level: i, label: `${l.height}p` })),
-      ];
-      hls!.subtitleTrack = -1; // start with captions off; the CC button opts in
-      hls!.subtitleDisplay = false;
-      renderQuality();
-      syncCc();
-    });
-    hls.on(Hls.Events.SUBTITLE_TRACKS_UPDATED, syncCc); // track may appear after a late playlist rewrite
-    hls.on(Hls.Events.LEVEL_SWITCHED, renderQuality); // ABR made visible — active level updates live
-    // hls.js owns error handling in MSE mode; recover transient faults, only surface unrecoverable ones.
-    let recovery = 0;
-    hls.on(Hls.Events.ERROR, (_e, data) => {
-      if (!data.fatal) return; // hls.js retries non-fatal errors itself
-      console.error("hls.js fatal:", data.type, data.details);
-      if (recovery < 3 && data.type === Hls.ErrorTypes.NETWORK_ERROR) {
-        recovery++;
-        hls!.startLoad();
-      } else if (recovery < 3 && data.type === Hls.ErrorTypes.MEDIA_ERROR) {
-        recovery++;
-        hls!.recoverMediaError();
-      } else {
-        hls!.destroy();
-        showError("Stream unavailable. The demo output may have expired.");
-      }
-    });
-  } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
-    video.src = opts.playlist; // Safari: native HLS, no quality menu
-    qualityWrap.hidden = true;
-    // native path: hls.js isn't here to manage errors, so listen on the element directly
-    video.addEventListener("error", () =>
-      showError("Stream unavailable. The demo output may have expired."),
-    );
-  } else {
-    qualityWrap.hidden = true;
-    showError("This browser can’t play HLS streams.");
-  }
-
-  // ---- chrome wiring ----
-  function syncPlay(): void {
-    playBtn.textContent = video.paused ? "▶" : "❚❚";
-    playBtn.setAttribute("aria-label", video.paused ? "Play" : "Pause");
-  }
-
-  const onPlay = () => syncPlay();
-  const onTime = () => {
-    if (!seeking && video.duration)
-      seek.value = String((video.currentTime / video.duration) * 1000);
-    timeEl.textContent = `${humanDuration(video.currentTime)} / ${humanDuration(video.duration)}`;
-  };
-
-  playBtn.addEventListener(
-    "click",
-    () => void (video.paused ? video.play() : video.pause()),
-  );
-  video.addEventListener("play", onPlay);
-  video.addEventListener("pause", onPlay);
-  video.addEventListener("timeupdate", onTime);
-  video.addEventListener("loadedmetadata", onTime);
-  seek.addEventListener("input", () => {
+  if (video.textTracks)
+    listen(video.textTracks, "addtrack", syncCaptions);
+  listen(video, "volumechange", syncVolume);
+  listen(video, "error", () => {
+    if (!hls) showError("This stream is unavailable or may have expired.");
+  });
+  listen(seek, "input", () => {
     seeking = true;
   });
-  seek.addEventListener("change", () => {
-    if (video.duration)
+  listen(seek, "change", () => {
+    if (Number.isFinite(video.duration) && video.duration > 0)
       video.currentTime = (Number(seek.value) / 1000) * video.duration;
     seeking = false;
+    syncTime();
   });
-  vol.addEventListener("input", () => {
-    video.volume = Number(vol.value) / 100;
+  listen(volume, "input", () => {
+    video.muted = false;
+    video.volume = Number(volume.value) / 100;
+    syncVolume();
   });
-  fullBtn.addEventListener("click", () => {
-    if (document.fullscreenElement) void document.exitFullscreen();
-    else void container.requestFullscreen();
+  listen(muteBtn, "click", () => {
+    video.muted = !video.muted;
+    syncVolume();
   });
-
-  // ---- quality menu ----
-  function renderQuality(): void {
-    const active = hls ? hls.currentLevel : -1;
-    qualityBtn.textContent =
-      active === -1
-        ? "Auto"
-        : (levels.find((l) => l.level === active)?.label ?? "Auto");
-    qualityMenu.innerHTML = levels
-      .map(
-        (l) =>
-          `<li role="menuitemradio" aria-checked="${l.level === active}" data-level="${l.level}" tabindex="0">${l.label}</li>`,
-      )
-      .join("");
-  }
-
-  function closeMenu(): void {
-    qualityMenu.hidden = true;
-    qualityBtn.setAttribute("aria-expanded", "false");
-  }
-
-  qualityBtn.addEventListener("click", () => {
-    const open = qualityMenu.hidden;
-    qualityMenu.hidden = !open;
-    qualityBtn.setAttribute("aria-expanded", String(open));
+  listen(quality, "change", () => {
+    if (hls) hls.currentLevel = Number(quality.value);
   });
-  qualityMenu.addEventListener("click", (e) => {
-    const li = (e.target as HTMLElement).closest<HTMLLIElement>(
-      "li[data-level]",
+  listen(captions, "click", toggleCaptions);
+  listen(fullscreen, "click", () => {
+    if (document.fullscreenElement) void document.exitFullscreen?.();
+    else void container.requestFullscreen?.();
+  });
+  listen(document, "fullscreenchange", () => {
+    const active = document.fullscreenElement === container;
+    fullscreen.setAttribute(
+      "aria-label",
+      active ? "Exit fullscreen" : "Enter fullscreen",
     );
-    if (!li || !hls) return;
-    hls.currentLevel = Number(li.dataset.level); // -1 = auto; manual pin otherwise
-    renderQuality();
-    closeMenu();
   });
-  const onDocClick = (e: MouseEvent) => {
-    if (!qualityWrap.contains(e.target as Node)) closeMenu();
-  };
-  document.addEventListener("click", onDocClick);
+  listen(container, "pointermove", () => showControls());
+  listen(container, "pointerdown", () => showControls());
+  listen(container, "focusin", () => showControls(true));
+  listen(container, "focusout", () => showControls());
+  listen(video, "keydown", ((event: KeyboardEvent) => {
+    const key = event.key.toLowerCase();
+    if (key === " " || key === "k") {
+      event.preventDefault();
+      void togglePlayback();
+    } else if (key === "arrowleft" || key === "arrowright") {
+      event.preventDefault();
+      const delta = key === "arrowleft" ? -5 : 5;
+      video.currentTime = Math.max(
+        0,
+        Math.min(video.duration || Infinity, video.currentTime + delta),
+      );
+      syncTime();
+    } else if (key === "m") {
+      event.preventDefault();
+      video.muted = !video.muted;
+      syncVolume();
+    } else if (key === "c" && !captions.hidden) {
+      event.preventDefault();
+      toggleCaptions();
+    } else if (key === "f") {
+      event.preventDefault();
+      fullscreen.click();
+    }
+  }) as EventListener);
+  listen(retry, "click", attachTransport);
+
+  attachTransport();
+  syncPlay();
+  syncVolume();
 
   return {
+    reload() {
+      if (destroyed) return;
+      hideError();
+      if (hls) hls.loadSource(opts.playlist);
+      else if (video.src) video.load();
+      else attachTransport();
+    },
     destroy() {
-      document.removeEventListener("click", onDocClick);
+      destroyed = true;
+      clearControlsTimer();
+      events.abort();
       hls?.destroy();
       hls = null;
+      video.removeAttribute("src");
       container.replaceChildren();
-      container.classList.remove("player");
+      container.classList.remove(
+        "player",
+        "player--controls-visible",
+        "player--playing",
+      );
     },
   };
 }

@@ -257,6 +257,23 @@ def test_done_returns_results_urls(client):
     }
 
 
+def test_done_returns_exact_output_expiry(client, monkeypatch):
+    c, fake = client
+    seed(
+        fake,
+        "j4-expiry",
+        status="done",
+        presets=json.dumps(["720p"]),
+        source_meta=json.dumps({"duration": 60}),
+        finished_at="2026-06-17T11:01:00+00:00",
+    )
+    monkeypatch.setattr(job_route.config, "output_ttl_days", 7)
+
+    body = c.get("/jobs/j4-expiry").json()
+
+    assert body["expires_at"] == "2026-06-24T11:01:00+00:00"
+
+
 # ---- cancel ----
 
 @pytest.mark.parametrize("status", ["queued", "transcoding"])
@@ -417,6 +434,39 @@ def test_list_accepts_active_status_filter(client):
     assert [item["job_id"] for item in response.json()["items"]] == ["active"]
 
 
+def test_list_processing_group_includes_active_progress(client, monkeypatch):
+    c, fake = client
+    seed(
+        fake,
+        "active",
+        status="transcoding",
+        source_filename="active.mp4",
+        presets=json.dumps(["720p", "480p"]),
+        **{"progress:720p": "50", "progress:480p": "25"},
+    )
+    fake.zsets[f"session:{SESSION_HASH}:jobs"] = {"active": 2.0}
+    monkeypatch.setattr(job_route, "db_list_jobs", lambda **_kwargs: [])
+
+    item = c.get("/jobs?status=processing").json()["items"][0]
+
+    assert item["status"] == "transcoding"
+    assert item["presets"] == ["720p", "480p"]
+    assert item["progress"] == {"720p": 50.0, "480p": 25.0}
+
+
+def test_list_ready_group_maps_to_done(client, monkeypatch):
+    c, _ = client
+    captured = {}
+
+    def spy(**kwargs):
+        captured.update(kwargs)
+        return []
+
+    monkeypatch.setattr(job_route, "db_list_jobs", spy)
+    assert c.get("/jobs?status=ready").status_code == 200
+    assert captured["status"] == "done"
+
+
 def test_list_forwards_status_limit_offset_to_db(client, monkeypatch):
     c, _ = client
     captured = {}
@@ -489,6 +539,7 @@ def test_get_falls_back_to_postgres_for_done(client, monkeypatch):
     assert body["status"] == "done"
     assert body["results"]["playlist"] == "/jobs/jgone/playlist"
     assert body["results"]["presets"] == ["720p", "480p"] and body["results"]["duration"] == 60.0
+    assert body["expires_at"].startswith("2026-06-24")
 
 
 def test_get_falls_back_to_postgres_for_failed(client, monkeypatch):
