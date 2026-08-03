@@ -38,7 +38,12 @@ def _expire_outputs(now: datetime) -> tuple[int, int]:
             except FileNotFoundError:
                 pass                                     # already gone (idempotent re-run) — proceed to mark
             if row.get("content_hash"):
-                dedupe.release_owner(r, row["content_hash"], job_id)
+                dedupe.release_owner(
+                    r,
+                    row.get("owner_session_hash"),
+                    row["content_hash"],
+                    job_id,
+                )
             r.delete(f"job:{job_id}")                    # drop stale hot state -> reads fall back to PG (expired)
             if db.mark_expired(job_id, now):
                 emit(JOB_EXPIRED, job_id, {})
@@ -128,7 +133,7 @@ def _sweep_stale_active(now: datetime) -> int:
         terminal_outbox.drain_one(r, job_id)
         content_hash = cast(str | None, rec.get("content_hash"))
         if content_hash:
-            dedupe.release_owner(r, content_hash, job_id)
+            dedupe.release_owner(r, rec.get("owner_session_hash"), content_hash, job_id)
         source_gone = False
         for path in (config.uploads_dir / job_id, config.output_dir / job_id):
             try:

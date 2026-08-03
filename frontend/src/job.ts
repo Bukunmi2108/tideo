@@ -288,7 +288,7 @@ function render(): void {
   }
   appEl.innerHTML = `
     ${siteHeader()}
-    <main class="job-main">${card()}</main>
+    <main id="main-content" class="job-main">${card()}</main>
   `;
   bind();
   if (view.tag === "done") {

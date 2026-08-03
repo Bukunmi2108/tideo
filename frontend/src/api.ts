@@ -1,6 +1,8 @@
 // Typed API client — every backend response shape mirrored here.
 // tsc --noEmit is the lint step; a backend shape change = compile error.
 
+import { SESSION_HEADER, guestSession } from "./session";
+
 export function apiBase(): string {
   return import.meta.env.VITE_API_BASE ?? "";
 }
@@ -133,8 +135,14 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return body as T;
 }
 
+async function ownerRequest<T>(path: string, init?: RequestInit): Promise<T> {
+  const headers = new Headers(init?.headers);
+  headers.set(SESSION_HEADER, guestSession());
+  return request<T>(path, { ...init, headers });
+}
+
 export function getJob(jobId: string): Promise<JobResponse> {
-  return request<JobResponse>(`/jobs/${jobId}`);
+  return ownerRequest<JobResponse>(`/jobs/${jobId}`);
 }
 
 export interface Storyboard {
@@ -186,14 +194,14 @@ export function listJobs(
   if (opts.limit != null) q.set("limit", String(opts.limit));
   if (opts.offset != null) q.set("offset", String(opts.offset));
   const qs = q.toString();
-  return request<JobListResponse>(`/jobs${qs ? `?${qs}` : ""}`, { signal });
+  return ownerRequest<JobListResponse>(`/jobs${qs ? `?${qs}` : ""}`, { signal });
 }
 
 export function postTranscode(
   jobId: string,
   body: TranscodeRequest,
 ): Promise<{ job_id: string; status: string }> {
-  return request(`/jobs/${jobId}/transcode`, {
+  return ownerRequest(`/jobs/${jobId}/transcode`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -203,5 +211,5 @@ export function postTranscode(
 export function postCancel(
   jobId: string,
 ): Promise<{ job_id: string; status: string }> {
-  return request(`/jobs/${jobId}/cancel`, { method: "POST" });
+  return ownerRequest(`/jobs/${jobId}/cancel`, { method: "POST" });
 }

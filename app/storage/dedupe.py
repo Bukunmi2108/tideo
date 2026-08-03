@@ -16,12 +16,14 @@ if owner then
 end
 
 redis.call('SET', KEYS[1], ARGV[1], 'EX', ARGV[2])
-for i = 4, #ARGV, 2 do
+for i = 5, #ARGV, 2 do
     redis.call('HSET', KEYS[2], ARGV[i], ARGV[i + 1])
 end
 redis.call('HSET', KEYS[2], 'status', 'inspecting')
 redis.call('HINCRBY', KEYS[3], 'inspecting', 1)
 redis.call('ZADD', KEYS[4], ARGV[3], ARGV[1])
+redis.call('ZADD', KEYS[5], ARGV[4], ARGV[1])
+redis.call('EXPIRE', KEYS[5], ARGV[2])
 return {'miss', ARGV[1], 'inspecting'}
 """
 
@@ -59,22 +61,26 @@ def _text(value) -> str:
 
 async def resolve_upload(
     r,
+    owner_session_hash: str,
     content_hash: str,
     job_id: str,
     extra: dict,
 ) -> UploadResolution:
     ttl = config.output_ttl_days * 86400
+    now = time.time()
     args = [value for item in extra.items() for value in (item[0], str(item[1]))]
     raw = await r.eval(
         _RESOLVE_UPLOAD,
-        4,
-        f"content:{content_hash}",
+        5,
+        content_key(owner_session_hash, content_hash),
         f"job:{job_id}",
         "stats:active",
         ACTIVE_DEADLINES,
+        f"session:{owner_session_hash}:jobs",
         job_id,
         ttl,
-        time.time() + ttl,
+        now + ttl,
+        now,
         *args,
     )
     outcome = _text(raw[0])
@@ -87,16 +93,32 @@ async def resolve_upload(
     )
 
 
-async def invalidate_done(r, content_hash: str, owner: str) -> bool:
+def content_key(owner_session_hash: str | None, content_hash: str) -> str:
+    if owner_session_hash:
+        return f"content:{owner_session_hash}:{content_hash}"
+    return f"content:{content_hash}"
+
+
+async def invalidate_done(
+    r,
+    owner_session_hash: str,
+    content_hash: str,
+    owner: str,
+) -> bool:
     result = await r.eval(
         _INVALIDATE_DONE,
         2,
-        f"content:{content_hash}",
+        content_key(owner_session_hash, content_hash),
         f"job:{owner}",
         owner,
     )
     return bool(result)
 
 
-def release_owner(r, content_hash: str, owner: str) -> bool:
-    return bool(r.eval(_RELEASE_OWNER, 1, f"content:{content_hash}", owner))
+def release_owner(
+    r,
+    owner_session_hash: str | None,
+    content_hash: str,
+    owner: str,
+) -> bool:
+    return bool(r.eval(_RELEASE_OWNER, 1, content_key(owner_session_hash, content_hash), owner))

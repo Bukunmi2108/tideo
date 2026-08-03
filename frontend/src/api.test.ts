@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { getJob, postTranscode, ApiError } from "./api";
+import { getJob, getStoryboard, postTranscode, ApiError } from "./api";
+import { SESSION_HEADER } from "./session";
 
 function mockFetch(body: unknown, status = 200) {
   vi.stubGlobal("fetch", async () => ({
@@ -12,6 +13,27 @@ function mockFetch(body: unknown, status = 200) {
 afterEach(() => vi.restoreAllMocks());
 
 describe("getJob", () => {
+  it("sends the guest bearer token only as an owner header", async () => {
+    let capturedUrl = "";
+    let capturedInit: RequestInit | undefined;
+    vi.stubGlobal("fetch", async (url: string, init?: RequestInit) => {
+      capturedUrl = url;
+      capturedInit = init;
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ job_id: "j1", status: "inspecting" }),
+      };
+    });
+
+    await getJob("j1");
+
+    expect(capturedUrl).not.toContain("session=");
+    expect(new Headers(capturedInit?.headers).get(SESSION_HEADER)).toMatch(
+      /^v1\.[A-Za-z0-9_-]{43}$/,
+    );
+  });
+
   it("parses a transcoding response", async () => {
     mockFetch({
       job_id: "j1",
@@ -127,6 +149,32 @@ describe("getJob", () => {
     const err = await getJob("j1").catch((e: unknown) => e);
 
     expect(err).toMatchObject({ code: "UNKNOWN", message: "Not Found" });
+  });
+});
+
+describe("public artifact metadata", () => {
+  it("does not attach the owner token to capability URLs", async () => {
+    let capturedInit: RequestInit | undefined;
+    vi.stubGlobal("fetch", async (_url: string, init?: RequestInit) => {
+      capturedInit = init;
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          url: "/jobs/j1/sprite",
+          tiles: 1,
+          cols: 1,
+          rows: 1,
+          tile_w: 160,
+          tile_h: 90,
+          interval: 5,
+        }),
+      };
+    });
+
+    await getStoryboard("j1");
+
+    expect(new Headers(capturedInit?.headers).has(SESSION_HEADER)).toBe(false);
   });
 });
 

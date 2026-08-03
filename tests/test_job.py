@@ -5,7 +5,13 @@ from fastapi.testclient import TestClient
 
 from app.api.main import app
 from app.api.routes import job as job_route
+from app.api.session import hash_session_token
 from app.storage.job_control import CancelResult
+
+SESSION_TOKEN = "v1." + "A" * 43
+OTHER_TOKEN = "v1." + "B" * 43
+SESSION_HASH = hash_session_token(SESSION_TOKEN)
+SESSION_HEADERS = {"X-Tideo-Session": SESSION_TOKEN}
 
 
 class FakeRedis:
@@ -14,6 +20,7 @@ class FakeRedis:
     def __init__(self):
         self.hashes = {}
         self.kv = {}
+        self.zsets = {}
 
     async def hgetall(self, k):
         return dict(self.hashes.get(k, {}))
@@ -35,6 +42,19 @@ class FakeRedis:
 
     async def expire(self, k, ttl):
         return True
+
+    async def zrevrange(self, key, start, end):
+        members = sorted(
+            self.zsets.get(key, {}).items(),
+            key=lambda item: item[1],
+            reverse=True,
+        )
+        stop = None if end == -1 else end + 1
+        return [member for member, _score in members[start:stop]]
+
+    async def zrem(self, key, *members):
+        for member in members:
+            self.zsets.get(key, {}).pop(member, None)
 
 
 @pytest.fixture
@@ -58,10 +78,15 @@ def client(monkeypatch):
         return CancelResult("cancelled", status, tuple(ids))
 
     monkeypatch.setattr(job_route, "acancel_job", cancel_job)
-    return TestClient(app, raise_server_exceptions=False), fake
+    return TestClient(
+        app,
+        raise_server_exceptions=False,
+        headers=SESSION_HEADERS,
+    ), fake
 
 
 def seed(fake, job_id, **fields):
+    fields.setdefault("owner_session_hash", SESSION_HASH)
     fake.hashes[f"job:{job_id}"] = {k: str(v) for k, v in fields.items()}
 
 
@@ -89,6 +114,22 @@ def test_unknown_id_is_404(client):
     r = c.get("/jobs/j_nope")
     assert r.status_code == 404
     assert r.json()["error"]["code"] == "JOB_NOT_FOUND"
+
+
+def test_foreign_and_ownerless_jobs_are_indistinguishable_from_unknown(client):
+    c, fake = client
+    seed(fake, "foreign", status="inspecting")
+    seed(fake, "legacy", status="done", owner_session_hash="")
+
+    foreign = c.get(
+        "/jobs/foreign",
+        headers={"X-Tideo-Session": OTHER_TOKEN},
+    )
+    legacy = c.get("/jobs/legacy")
+
+    assert foreign.status_code == legacy.status_code == 404
+    assert foreign.json()["error"]["code"] == "JOB_NOT_FOUND"
+    assert legacy.json()["error"]["code"] == "JOB_NOT_FOUND"
 
 
 def test_expired_is_410(client):
@@ -310,6 +351,7 @@ def _pg_row(job_id, status="done", **kw):
         "started_at": datetime(2026, 6, 17, 10, 0, 5, tzinfo=UTC),
         "finished_at": datetime(2026, 6, 17, 10, 1, tzinfo=UTC),
         "expired_at": None,
+        "owner_session_hash": SESSION_HASH,
     }
     row.update(kw)
     return row
@@ -324,8 +366,8 @@ def test_list_paginates_and_reports_has_more(client, monkeypatch):
     assert r.status_code == 200
     body = r.json()
     assert body["has_more"] is True and body["limit"] == 2 and body["offset"] == 0
-    assert [it["job_id"] for it in body["items"]] == ["j0", "j1"]   # 3rd trimmed
-    assert body["items"][0]["source_filename"] == "j0.mp4" and body["items"][0]["duration"] == 60.0
+    assert [it["job_id"] for it in body["items"]] == ["j2", "j1"]
+    assert body["items"][0]["source_filename"] == "j2.mp4" and body["items"][0]["duration"] == 60.0
 
 
 def test_list_no_more_when_under_limit(client, monkeypatch):
@@ -335,17 +377,67 @@ def test_list_no_more_when_under_limit(client, monkeypatch):
     assert body["has_more"] is False and len(body["items"]) == 1
 
 
+def test_list_merges_active_redis_jobs_with_terminal_history(client, monkeypatch):
+    c, fake = client
+    seed(
+        fake,
+        "active",
+        status="transcoding",
+        source_filename="active.mp4",
+        source_meta=json.dumps({"duration": 30.0}),
+        created_at="2026-06-17T11:00:00+00:00",
+    )
+    fake.zsets[f"session:{SESSION_HASH}:jobs"] = {"active": 2.0}
+    monkeypatch.setattr(
+        job_route,
+        "db_list_jobs",
+        lambda **_kwargs: [_pg_row("terminal", created_at=datetime(2026, 6, 17, 10, 0, tzinfo=UTC))],
+    )
+
+    body = c.get("/jobs").json()
+
+    assert [item["job_id"] for item in body["items"]] == ["active", "terminal"]
+    assert body["items"][0]["status"] == "transcoding"
+
+
+def test_list_accepts_active_status_filter(client):
+    c, fake = client
+    seed(
+        fake,
+        "active",
+        status="inspecting",
+        source_filename="active.mp4",
+        created_at="2026-06-17T11:00:00+00:00",
+    )
+    fake.zsets[f"session:{SESSION_HASH}:jobs"] = {"active": 2.0}
+
+    response = c.get("/jobs?status=inspecting")
+
+    assert response.status_code == 200
+    assert [item["job_id"] for item in response.json()["items"]] == ["active"]
+
+
 def test_list_forwards_status_limit_offset_to_db(client, monkeypatch):
     c, _ = client
     captured = {}
 
-    def spy(*, status=None, limit=20, offset=0):
-        captured.update(status=status, limit=limit, offset=offset)
+    def spy(*, owner_session_hash, status=None, limit=20, offset=0):
+        captured.update(
+            owner_session_hash=owner_session_hash,
+            status=status,
+            limit=limit,
+            offset=offset,
+        )
         return []
 
     monkeypatch.setattr(job_route, "db_list_jobs", spy)
     c.get("/jobs?status=done&limit=5&offset=10")
-    assert captured == {"status": "done", "limit": 5, "offset": 10}   # filter not silently dropped
+    assert captured == {
+        "owner_session_hash": SESSION_HASH,
+        "status": "done",
+        "limit": 16,
+        "offset": 0,
+    }
 
 
 @pytest.mark.parametrize("qs,code", [

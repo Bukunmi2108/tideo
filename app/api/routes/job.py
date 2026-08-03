@@ -1,9 +1,10 @@
 import json
 import math
 import shutil
-from datetime import timedelta
+from datetime import datetime, timedelta
+from typing import Annotated
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
@@ -17,9 +18,10 @@ from app.api.model import (
     results_view,
     results_view_pg,
 )
+from app.api.session import owns_job, require_session, session_jobs_key
 from app.core.config import config
 from app.core.logging import bind_job, get_logger
-from app.domain.state import TERMINAL
+from app.domain.state import ACTIVE, TERMINAL
 from app.events.envelope import Envelope
 from app.events.producer import emit
 from app.events.topics import JOB_CANCELLED, JOB_CREATED
@@ -33,7 +35,7 @@ from app.workers.celery_app import app as celery_app
 
 router = APIRouter(
     tags=["Job"],
-    responses={code: {"model": ErrorResponse} for code in (404, 409, 410, 422, 503)},
+    responses={code: {"model": ErrorResponse} for code in (401, 404, 409, 410, 422, 503)},
 )
 log = get_logger()
 
@@ -54,7 +56,20 @@ def _duplicates(values: list[str]) -> list[str]:
 
 
 def _iso(dt) -> str | None:
-    return dt.isoformat() if dt is not None else None
+    if dt is None:
+        return None
+    return dt if isinstance(dt, str) else dt.isoformat()
+
+
+def _datetime(value) -> datetime | None:
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, str):
+        try:
+            return datetime.fromisoformat(value)
+        except ValueError:
+            return None
+    return None
 
 
 def _job_summary(row: dict) -> dict:
@@ -75,6 +90,47 @@ def _job_summary(row: dict) -> dict:
     }
 
 
+def _redis_job_summary(job_id: str, rec: dict) -> dict:
+    source = {}
+    try:
+        source = json.loads(rec.get("source_meta") or "{}")
+    except (json.JSONDecodeError, TypeError):
+        pass
+    if not isinstance(source, dict):
+        source = {}
+    duration = source.get("duration")
+    if isinstance(duration, bool):
+        duration = None
+    else:
+        try:
+            duration = float(duration) if duration is not None else None
+        except (TypeError, ValueError):
+            duration = None
+    if duration is not None and not math.isfinite(duration):
+        duration = None
+    finished = _datetime(rec.get("finished_at"))
+    status = rec.get("status", "")
+    row = {
+        "job_id": job_id,
+        "status": status,
+        "source_filename": rec.get("source_filename"),
+        "source_duration_s": duration,
+        "created_at": _datetime(rec.get("created_at")),
+        "finished_at": finished,
+    }
+    return _job_summary(row)
+
+
+def _not_found(job_id: str) -> ApiError:
+    return ApiError(404, "JOB_NOT_FOUND", "no such job", job_id=job_id)
+
+
+def _require_owner(record: dict | None, owner_session_hash: str, job_id: str) -> dict:
+    if not owns_job(record, owner_session_hash):
+        raise _not_found(job_id)
+    return record or {}
+
+
 def _response_from_pg(job_id: str, row: dict) -> dict:
     """Build a job response from Postgres."""
     status = row["status"]
@@ -90,29 +146,69 @@ def _response_from_pg(job_id: str, row: dict) -> dict:
 
 @router.get("/jobs", response_model=JobListResponse)
 async def list_jobs(
+    owner_session_hash: Annotated[str, Depends(require_session)],
     status: str | None = Query(None),
     limit: int = Query(20, ge=1, le=50),
     offset: int = Query(0, ge=0),
 ):
-    if status is not None and status not in TERMINAL:
+    if status is not None and status not in ACTIVE | TERMINAL:
         raise ApiError(422, "BAD_STATUS", f"unknown status filter: {status}")
-    rows = await run_in_threadpool(db_list_jobs, status=status, limit=limit, offset=offset)
-    has_more = len(rows) > limit
+
+    r = get_client()
+    ids = await r.zrevrange(session_jobs_key(owner_session_hash), 0, -1)
+    items_by_id = {}
+    stale = []
+    for job_id in ids:
+        rec = await r.hgetall(f"job:{job_id}")
+        if not rec:
+            stale.append(job_id)
+            continue
+        if not owns_job(rec, owner_session_hash):
+            stale.append(job_id)
+            continue
+        if status is None or rec.get("status") == status:
+            items_by_id[job_id] = _redis_job_summary(job_id, rec)
+    if stale:
+        await r.zrem(session_jobs_key(owner_session_hash), *stale)
+
+    target = offset + limit + 1
+    rows = []
+    if status is None or status in TERMINAL:
+        rows = await run_in_threadpool(
+            db_list_jobs,
+            owner_session_hash=owner_session_hash,
+            status=status,
+            limit=target,
+            offset=0,
+        )
+    for row in rows:
+        items_by_id[row["job_id"]] = _job_summary(row)
+    items = sorted(
+        items_by_id.values(),
+        key=lambda item: (item.get("created_at") or "", item["job_id"]),
+        reverse=True,
+    )
+    page = items[offset : offset + limit]
     return {
-        "items": [_job_summary(r) for r in rows[:limit]],
-        "limit": limit, "offset": offset, "has_more": has_more,
+        "items": page,
+        "limit": limit,
+        "offset": offset,
+        "has_more": len(items) > offset + limit,
     }
 
 
 @router.get("/jobs/{job_id}", response_model=JobResponse)
-async def get_job(job_id: str):
+async def get_job(
+    job_id: str,
+    owner_session_hash: Annotated[str, Depends(require_session)],
+):
     bind_job(job_id)
     rec = await get_client().hgetall(f"job:{job_id}")
     if not rec or "status" not in rec:
         row = await run_in_threadpool(db_get_job, job_id)
-        if not row:
-            raise ApiError(404, "JOB_NOT_FOUND", "no such job", job_id=job_id)
+        _require_owner(row, owner_session_hash, job_id)
         return _response_from_pg(job_id, row)
+    _require_owner(rec, owner_session_hash, job_id)
     status = rec["status"]
     if status == "expired":
         raise ApiError(410, "JOB_EXPIRED", "job outputs have expired", job_id=job_id)
@@ -133,12 +229,15 @@ async def get_job(job_id: str):
     return resp
 
 @router.post("/jobs/{job_id}/transcode", status_code=202)
-async def transcode(job_id: str, body: TranscodeRequest):
+async def transcode(
+    job_id: str,
+    body: TranscodeRequest,
+    owner_session_hash: Annotated[str, Depends(require_session)],
+):
     bind_job(job_id)
     r = get_client()
     rec = await r.hgetall(f"job:{job_id}")
-    if not rec:
-        raise ApiError(404, "JOB_NOT_FOUND", "no such job", job_id=job_id)
+    _require_owner(rec, owner_session_hash, job_id)
     if rec["status"] != "awaiting_choice":
         raise ApiError(409, "WRONG_STATE",
                        f"job is {rec['status']}, not awaiting_choice", job_id=job_id)
@@ -186,9 +285,14 @@ async def transcode(job_id: str, body: TranscodeRequest):
 
 
 @router.post("/jobs/{job_id}/cancel", status_code=202)
-async def cancel(job_id: str):
+async def cancel(
+    job_id: str,
+    owner_session_hash: Annotated[str, Depends(require_session)],
+):
     bind_job(job_id)
     r = get_client()
+    rec = await r.hgetall(f"job:{job_id}")
+    _require_owner(rec, owner_session_hash, job_id)
     result = await acancel_job(r, job_id, ttl=config.output_ttl_days * 86400)
     if result.outcome == "missing":
         raise ApiError(404, "JOB_NOT_FOUND", "no such job", job_id=job_id)

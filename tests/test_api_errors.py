@@ -14,7 +14,11 @@ from app.api.main import app
 
 @pytest.fixture
 def client():
-    return TestClient(app, raise_server_exceptions=False)
+    return TestClient(
+        app,
+        raise_server_exceptions=False,
+        headers={"X-Tideo-Session": "v1." + "A" * 43},
+    )
 
 
 @pytest.mark.parametrize(
@@ -106,8 +110,8 @@ def test_method_error_preserves_allow_header(client):
 @pytest.mark.parametrize(
     "path,method,codes",
     [
-        ("/upload", "post", ("413", "415", "422", "503")),
-        ("/jobs/{job_id}/transcode", "post", ("404", "409", "410", "422", "503")),
+        ("/upload", "post", ("401", "413", "415", "422", "503")),
+        ("/jobs/{job_id}/transcode", "post", ("401", "404", "409", "410", "422", "503")),
         ("/jobs/{job_id}/playlist", "get", ("403", "404", "410", "503")),
     ],
 )

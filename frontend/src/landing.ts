@@ -54,7 +54,7 @@ function hero(): string {
       </dl>
       <div class="lp-actions">
         <a href="/upload" class="btn btn-primary btn-lg">Upload a video</a>
-        <a href="/history" class="btn btn-ghost btn-lg">Browse the library</a>
+        <a href="/history" class="btn btn-ghost btn-lg">View my videos</a>
       </div>
     </div>
     <div class="lp-hero-screen">
@@ -88,7 +88,7 @@ export function mount(root: HTMLElement): () => void {
   let loop: Loop | null = null;
 
   root.innerHTML = `${siteHeader()}
-    <main class="lp-main">
+    <main id="main-content" class="lp-main">
       ${hero()}
       ${howItWorks()}
     </main>

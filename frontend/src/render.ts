@@ -66,9 +66,11 @@ export function expiresIn(
 }
 
 export function siteHeader(): string {
-  const path = typeof location !== "undefined" ? location.pathname : "/";
+  const rawPath = typeof location !== "undefined" ? location.pathname : "/";
+  const path = rawPath.length > 1 ? rawPath.replace(/\/$/, "") : rawPath;
   const here = (p: string) => (path === p ? ' aria-current="page"' : "");
-  return `<header class="site-header">
+  return `<a class="skip-link" href="#main-content">Skip to content</a>
+  <header class="site-header">
     <a href="/" class="wordmark">
       <svg class="wordmark-mark" width="20" height="18" viewBox="0 0 20 18" aria-hidden="true">
         <rect x="0.5" y="11" width="3" height="7" rx="1.5" />
@@ -78,7 +80,7 @@ export function siteHeader(): string {
       </svg>tideo</a>
     <nav class="site-nav">
       <a href="/upload"${here("/upload")} class="site-nav-link">Upload</a>
-      <a href="/history"${here("/history")} class="site-nav-link">Library</a>
+      <a href="/history"${here("/history")} class="site-nav-link">My videos</a>
     </nav>
   </header>`;
 }

@@ -2,6 +2,7 @@ import { apiBase, type UploadResponse } from "./api";
 import { navigate } from "./router";
 import { esc, humanBytes, siteHeader, siteFooter } from "./render";
 import { waitForBackendReady } from "./wake";
+import { SESSION_HEADER, guestSession } from "./session";
 
 // ---- State ----------------------------------------------------------------
 
@@ -82,7 +83,7 @@ export function mount(root: HTMLElement): () => void {
   }
 
   function render(): void {
-    root.innerHTML = `${siteHeader()}<main class="upload-main">${card()}</main>${siteFooter()}`;
+    root.innerHTML = `${siteHeader()}<main id="main-content" class="upload-main">${card()}</main>${siteFooter()}`;
     bind();
   }
 
@@ -258,6 +259,7 @@ export function mount(root: HTMLElement): () => void {
       `${apiBase()}/upload?filename=${encodeURIComponent(file.name)}`,
     );
     xhr.setRequestHeader("Content-Type", "application/octet-stream");
+    xhr.setRequestHeader(SESSION_HEADER, guestSession());
 
     xhr.upload.onprogress = (e) => {
       const now = Date.now();

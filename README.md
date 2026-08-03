@@ -26,7 +26,8 @@ upload ──▶ inspect ──▶ [ you pick ] ──▶ transcode ──▶ pa
                                    └──▶ transcribe (faster-whisper → VTT, fail-soft) ──┘
 ```
 
-You upload a file; the API streams it to disk while hashing it (identical bytes never transcode twice).
+You upload a file; the API streams it to disk while hashing it (identical bytes within one guest
+session never transcode twice).
 `ffprobe` reads the source and recommends a ladder capped at the source height — no upscaling. You pick
 the renditions (and whether to caption), then every rendition encodes **in parallel** on CPU workers,
 fans back into a single HLS package, and the job goes `done`.
@@ -58,6 +59,17 @@ Two brokers, on purpose — the project is a deliberate study of distributed-sys
   replaying the audit log never re-runs a transcode.
 - **Redis** holds hot state and streams progress over pub/sub to the browser via WebSocket; **Postgres**
   is the cold store for terminal jobs, per-rendition outcomes, and the event audit log.
+
+## Guest ownership
+
+Tideo identifies a browser with a versioned, random 256-bit token stored in `localStorage`. Owner
+operations send it in `X-Tideo-Session`; the progress WebSocket sends it in its first client frame.
+The backend stores only the token's SHA-256 digest and scopes upload dedupe, job reads and controls,
+and “My videos” history to that digest. Unknown and foreign jobs return the same 404 response.
+
+This is guest continuity, not an account: clearing site data loses access to the browser's history.
+Completed media remains shareable through its opaque `job_id` capability URLs, which deliberately do
+not carry the guest token in a URL, playlist, log, or referrer.
 
 ## Stack
 

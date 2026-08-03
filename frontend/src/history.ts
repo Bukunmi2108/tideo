@@ -105,7 +105,7 @@ export function mount(root: HTMLElement): () => void {
   let offset = 0;
 
   root.innerHTML = `${siteHeader()}
-    <main class="hist-main">
+    <main id="main-content" class="hist-main">
       <div class="hist-body">${skeletonGrid()}</div>
     </main>
     ${siteFooter()}`;
@@ -165,7 +165,7 @@ export function mount(root: HTMLElement): () => void {
       } else {
         const feat = featured(page.items);
         body.innerHTML = `${feat ? hero(feat) : ""}
-          <h2 class="hist-title">Library</h2>
+          <h2 class="hist-title">My videos</h2>
           <div class="hist-grid">${cards}</div>`;
       }
       if (page.has_more) {
