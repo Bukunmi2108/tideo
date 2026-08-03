@@ -7,12 +7,14 @@ beforeEach(() => {
 });
 
 describe("route metadata", () => {
-  it("provides production titles for every PR1 route", () => {
-    expect(routeMeta("/").title).toBe("Tideo — Adaptive video, on demand");
-    expect(routeMeta("/upload").title).toBe("Upload — Tideo");
-    expect(routeMeta("/job").title).toBe("Video job — Tideo");
-    expect(routeMeta("/history").title).toBe("My videos — Tideo");
-    expect(routeMeta("/missing").title).toBe("Page not found — Tideo");
+  it("provides production titles for every route", () => {
+    expect(routeMeta("/").title).toBe("Tideo | Adaptive video, on demand");
+    expect(routeMeta("/upload").title).toBe("Upload | Tideo");
+    expect(routeMeta("/job").title).toBe("Video job | Tideo");
+    expect(routeMeta("/history").title).toBe("My videos | Tideo");
+    expect(routeMeta("/privacy").title).toBe("Privacy | Tideo");
+    expect(routeMeta("/terms").title).toBe("Terms | Tideo");
+    expect(routeMeta("/missing").title).toBe("Page not found | Tideo");
   });
 });
 
@@ -37,7 +39,7 @@ describe("applyRouteChrome", () => {
 
     expect(document.activeElement).toBe(root.querySelector("h1"));
     expect(document.querySelector('[aria-live="polite"]')?.textContent).toBe(
-      "Upload — Tideo",
+      "Upload | Tideo",
     );
   });
 });

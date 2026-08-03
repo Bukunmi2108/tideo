@@ -27,7 +27,7 @@ export function mountPlayer(
   container.classList.add("player");
   container.innerHTML = `
     <video class="player-video" playsinline ${opts.poster ? `poster="${esc(opts.poster)}"` : ""}></video>
-    <div class="player-error" hidden></div>
+    <div class="error-message player-error" role="alert" hidden></div>
     <div class="pl-preview" hidden><div class="pl-preview-img"></div><span class="pl-preview-time">0:00</span></div>
     <div class="player-chrome">
       <button class="pl-btn pl-play" aria-label="Play">▶</button>
@@ -143,7 +143,7 @@ export function mountPlayer(
         hls!.recoverMediaError();
       } else {
         hls!.destroy();
-        showError("Stream unavailable — the demo output may have expired.");
+        showError("Stream unavailable. The demo output may have expired.");
       }
     });
   } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
@@ -151,7 +151,7 @@ export function mountPlayer(
     qualityWrap.hidden = true;
     // native path: hls.js isn't here to manage errors, so listen on the element directly
     video.addEventListener("error", () =>
-      showError("Stream unavailable — the demo output may have expired."),
+      showError("Stream unavailable. The demo output may have expired."),
     );
   } else {
     qualityWrap.hidden = true;

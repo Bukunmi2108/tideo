@@ -41,7 +41,9 @@ export function buildPicker(
       ...rung,
       available,
       checked: available,
-      reason: available ? null : `source is ${sourceHeight}p — no upscale`,
+      reason: available
+        ? null
+        : `Source is ${sourceHeight}p. Tideo will not upscale it.`,
     };
   });
 }

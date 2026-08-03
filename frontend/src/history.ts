@@ -14,6 +14,7 @@ import {
   spriteUrl,
   type Loop,
 } from "./sprite";
+import { icon } from "./icons";
 
 const PAGE = 24;
 
@@ -29,21 +30,19 @@ function posterCell(j: JobSummary): string {
     return `<img class="hist-poster" src="${esc(apiBase() + j.poster)}" alt="" loading="lazy">`;
   // designed placeholder for jobs whose poster is gone (failed/cancelled/expired) or not yet made
   return `<div class="hist-poster hist-poster--empty" aria-hidden="true">
-    <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.5">
-      <rect x="3" y="3" width="18" height="18" rx="2"/><path d="m3 16 5-5 4 4 3-3 6 6"/>
-    </svg></div>`;
+    ${icon("video")}</div>`;
 }
 
 function card(j: JobSummary, i = 0): string {
   const status = j.status;
-  const badge = `<span class="badge hist-badge hist-badge--${status}">${BADGES[status] ?? esc(status)}</span>`;
+  const badge = `<span class="status-badge hist-badge hist-badge--${status}">${BADGES[status] ?? esc(status)}</span>`;
   const dur = j.duration != null ? humanDuration(j.duration) : "";
   const when = relativeTime(j.created_at);
   const exp = status === "done" ? expiresIn(j.expires_at) : "";
   const sub = [dur, when].filter(Boolean).join(" · ");
   const playable = status === "done" && !!j.poster;
   const play = playable
-    ? `<div class="hist-scrub" aria-hidden="true"></div><div class="hist-play" aria-hidden="true"><span>▶</span></div>`
+    ? `<div class="hist-scrub" aria-hidden="true"></div><div class="hist-play" aria-hidden="true"><span>${icon("play")}</span></div>`
     : "";
   const data = playable ? ` data-job="${esc(j.job_id)}"` : "";
   return `<a class="hist-card"${data} style="--i:${i % 24}" href="/job?id=${encodeURIComponent(j.job_id)}">
@@ -85,16 +84,16 @@ function featured(items: JobSummary[]): JobSummary | null {
 
 function skeletonGrid(): string {
   const cell = `<div class="hist-card hist-card--sk">
-    <div class="sk hist-poster"></div>
-    <div class="hist-meta"><div class="sk sk-title"></div><div class="sk sk-val"></div></div>
+    <div class="skeleton hist-poster"></div>
+    <div class="hist-meta"><div class="skeleton sk-title"></div><div class="skeleton sk-val"></div></div>
   </div>`;
   return `<div class="hist-grid">${cell.repeat(8)}</div>`;
 }
 
 function emptyState(): string {
-  return `<div class="hist-empty">
-    <p class="hist-empty-head">Nothing here yet</p>
-    <p class="hist-empty-sub">Your transcoded videos will show up here.</p>
+  return `<div class="empty-state hist-empty">
+    <p class="empty-state-title hist-empty-head">Nothing here yet</p>
+    <p class="empty-state-copy hist-empty-sub">Your transcoded videos will show up here.</p>
     <a href="/upload" class="btn btn-primary">Upload your first video</a>
   </div>`;
 }
@@ -106,6 +105,7 @@ export function mount(root: HTMLElement): () => void {
 
   root.innerHTML = `${siteHeader()}
     <main id="main-content" class="hist-main">
+      <h1 class="sr-only">My videos</h1>
       <div class="hist-body">${skeletonGrid()}</div>
     </main>
     ${siteFooter()}`;
@@ -182,9 +182,9 @@ export function mount(root: HTMLElement): () => void {
         return;
       const msg =
         e instanceof ApiError && e.retryable
-          ? "Service busy — try again shortly."
+          ? "Service busy. Try again shortly."
           : "The API may be waking up. Refresh shortly if this takes more than a minute.";
-      body.innerHTML = `<div class="hist-empty"><p class="hist-empty-sub">${esc(msg)}</p></div>`;
+      body.innerHTML = `<div class="empty-state hist-empty"><p class="empty-state-copy hist-empty-sub">${esc(msg)}</p></div>`;
     }
   }
 

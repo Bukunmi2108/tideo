@@ -15,7 +15,7 @@ const STEPS: [string, string, string][] = [
   [
     "Upload",
     "Drop a video",
-    "Streamed straight to disk, hashed, and deduped — re-uploading the same file is instant.",
+    "Streamed straight to disk, hashed, and deduped. Re-uploading the same file is instant.",
   ],
   [
     "Inspect",
@@ -25,7 +25,7 @@ const STEPS: [string, string, string][] = [
   [
     "Choose",
     "Pick your rungs",
-    "Select which resolutions to build — 1080p down to 360p — and turn on captions.",
+    "Select resolutions from 1080p down to 360p, and turn on captions.",
   ],
   [
     "Encode",
@@ -43,8 +43,8 @@ function hero(): string {
   return `<section class="lp-hero">
     <div class="lp-hero-copy">
       <p class="lp-eyebrow">Distributed video transcoding</p>
-      <h1 class="lp-title">Upload once.<br />Stream every screen.</h1>
-      <p class="lp-lede">Tideo turns one source file into an adaptive HLS ladder — every resolution,
+      <h1 class="lp-title">Upload once. Stream every screen.</h1>
+      <p class="lp-lede">Tideo turns one source file into an adaptive HLS ladder, with every resolution
         encoded in parallel, ready to play at whatever bitrate the viewer's connection allows.</p>
       <dl class="lp-ledger">
         <div><dd>1080→360</dd><dt>ladder</dt></div>

@@ -12,7 +12,13 @@ import {
 } from "./api";
 import { watch, type StateFrame } from "./live";
 import { mountPlayer, type PlayerHandle } from "./player";
-import { esc, humanDuration, humanBitrate, siteHeader } from "./render";
+import {
+  esc,
+  humanDuration,
+  humanBitrate,
+  siteFooter,
+  siteHeader,
+} from "./render";
 import { buildPicker, estimateSeconds, type PickerRow } from "./presets";
 import { loadStoryboard, spriteUrl } from "./sprite";
 
@@ -289,6 +295,7 @@ function render(): void {
   appEl.innerHTML = `
     ${siteHeader()}
     <main id="main-content" class="job-main">${card()}</main>
+    ${siteFooter()}
   `;
   bind();
   if (view.tag === "done") {
@@ -337,17 +344,18 @@ function card(): string {
 function cardInspecting(): string {
   return `
     <div class="inspect-card" aria-busy="true" aria-label="Inspecting your video">
+      <h1 class="sr-only">Inspecting video</h1>
       <div class="inspect-head">
-        <div class="sk sk-title"></div>
-        <div class="sk sk-badge"></div>
+        <div class="skeleton sk-title"></div>
+        <div class="skeleton sk-badge"></div>
       </div>
       <div class="spec-grid">
-        ${'<div class="spec-row"><div class="sk sk-key"></div><div class="sk sk-val"></div></div>'.repeat(5)}
+        ${'<div class="spec-row"><div class="skeleton sk-key"></div><div class="skeleton sk-val"></div></div>'.repeat(5)}
       </div>
       <div class="picker">
-        ${'<div class="picker-row"><div class="sk sk-pick"></div></div>'.repeat(4)}
+        ${'<div class="picker-row"><div class="skeleton sk-pick"></div></div>'.repeat(4)}
       </div>
-      <div class="sk sk-btn"></div>
+      <div class="skeleton sk-btn"></div>
     </div>
   `;
 }
@@ -365,16 +373,16 @@ function cardAwaiting(job: JobResponse): string {
     <div class="inspect-card">
       <div class="inspect-head">
         <h1 class="inspect-title" title="${filename}">${filename}</h1>
-        <span class="badge ${safe ? "badge-ok" : "badge-warn"}"
-              title="${safe ? "Web-ready — fast remux" : badgeReason}">
+        <span class="status-badge ${safe ? "status-badge--success" : "status-badge--warning"}"
+              title="${safe ? "Web-ready: fast remux" : badgeReason}">
           ${safe ? "web-ready" : "needs re-encode"}
         </span>
       </div>
 
       <div class="spec-grid">
         ${specRow("Container", esc(s.container))}
-        ${specRow("Video", esc(s.video_codec ?? "—"))}
-        ${specRow("Audio", s.has_audio ? esc(s.audio_codec ?? "—") : "none")}
+        ${specRow("Video", esc(s.video_codec ?? "Not available"))}
+        ${specRow("Audio", s.has_audio ? esc(s.audio_codec ?? "Not available") : "none")}
         ${specRow("Resolution", `${s.width}×${s.height}`)}
         ${specRow("Duration", humanDuration(s.duration))}
         ${specRow("Bitrate", humanBitrate(s.bitrate))}
@@ -386,13 +394,13 @@ function cardAwaiting(job: JobResponse): string {
       </fieldset>
 
       <label class="toggle-row ${hasAudio ? "" : "toggle-disabled"}"
-             title="${hasAudio ? "Transcribe speech to a WebVTT caption track" : "No audio stream — nothing to transcribe"}">
+             title="${hasAudio ? "Transcribe speech to a WebVTT caption track" : "No audio stream. Nothing to transcribe."}">
         <input type="checkbox" id="captions-toggle" ${captionsWanted ? "checked" : ""} ${hasAudio ? "" : "disabled"} />
         <span>Generate captions</span>
         ${hasAudio ? "" : `<span class="toggle-note">no audio</span>`}
       </label>
 
-      ${commitError ? `<p class="commit-error">${esc(commitError)}</p>` : ""}
+      ${commitError ? `<p class="error-message commit-error">${esc(commitError)}</p>` : ""}
 
       <div class="commit-row">
         <span class="estimate" id="estimate">${estimateText()}</span>
@@ -434,7 +442,7 @@ function cardProgress(): string {
     <div class="inspect-card progress-card">
       <div class="inspect-head">
         <h1 class="inspect-title">${allDone ? "Finalizing…" : "Transcoding…"}</h1>
-        ${mode === "polling" ? `<span class="mode-pill">live updates paused — retrying</span>` : ""}
+        ${mode === "polling" ? `<span class="mode-pill">Live updates paused. Retrying.</span>` : ""}
       </div>
       <div class="bars">${presets.map(progressBar).join("") || '<p class="term-msg">Queued…</p>'}</div>
       <p class="progress-status" id="progress-status">${statusLine()}</p>
@@ -493,7 +501,7 @@ function captionNote(results: JobResults): string {
     subs.status === "processing"
       ? "Captions: generating…"
       : subs.status === "ready"
-        ? "Captions: ready — toggle CC in the player"
+        ? "Captions ready. Toggle CC in the player."
         : subs.status === "none"
           ? "Captions: no speech to transcribe"
           : "Captions: unavailable";
@@ -540,7 +548,7 @@ function cardDone(results: JobResults): string {
             <div class="ladder-head">Rendition ladder</div>
             <div class="ladder-rows" id="ladder-rows"><div class="ladder-loading">reading manifest…</div></div>
           </div>
-          <details class="embed-block">
+          <details class="disclosure embed-block">
             <summary>Embed snippet</summary>
             <pre class="embed-code">${esc(embedSnippet(base + results.playlist))}</pre>
             <button class="btn btn-ghost" id="copy-embed" type="button">Copy snippet</button>
@@ -579,7 +587,7 @@ function cardFailed(error?: JobError): string {
   const code = error?.code ?? "FAILED";
   const stage = error?.stage ? ` · ${esc(error.stage)}` : "";
   const retry = error?.retryable
-    ? " This may be transient — try uploading again."
+    ? " This may be transient. Try uploading again."
     : "";
   return `
     <div class="inspect-card inspect-card--terminal">
@@ -733,7 +741,7 @@ async function copyText(
     await navigator.clipboard.writeText(text);
     btn.textContent = success;
   } catch {
-    btn.textContent = "Copy failed — press ⌘/Ctrl-C"; // clipboard blocked (insecure ctx / denied)
+    btn.textContent = "Copy failed. Press ⌘/Ctrl-C"; // clipboard blocked (insecure ctx / denied)
   }
   setTimeout(() => {
     btn.textContent = prev;

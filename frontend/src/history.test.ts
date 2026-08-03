@@ -48,6 +48,7 @@ describe("history mount", () => {
       page([job(), job({ job_id: "j2", source_filename: "two.mov" })]),
     );
     teardown = mount(root);
+    expect(root.querySelector("h1")?.textContent).toBe("My videos");
     await vi.waitFor(() =>
       expect(root.querySelectorAll(".hist-card").length).toBe(2),
     );

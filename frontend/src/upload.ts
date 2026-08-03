@@ -3,6 +3,7 @@ import { navigate } from "./router";
 import { esc, humanBytes, siteHeader, siteFooter } from "./render";
 import { waitForBackendReady } from "./wake";
 import { SESSION_HEADER, guestSession } from "./session";
+import { icon } from "./icons";
 
 // ---- State ----------------------------------------------------------------
 
@@ -35,28 +36,6 @@ const ERROR_HEADLINES: Record<string, string> = {
 };
 function errorHeadline(code: string): string {
   return ERROR_HEADLINES[code] ?? "Upload failed";
-}
-
-function iconUpload(): string {
-  return `<svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" width="48" height="48">
-    <path d="M24 32V16M16 24l8-8 8 8"/>
-    <path d="M8 36a8 8 0 0 1 0-16h2a12 12 0 1 1 24 0h2a8 8 0 0 1 0 16"/>
-  </svg>`;
-}
-function iconCheck(): string {
-  return `<svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" width="48" height="48">
-    <circle cx="24" cy="24" r="20"/><path d="M15 24l6 6 12-12"/>
-  </svg>`;
-}
-function iconX(): string {
-  return `<svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" width="48" height="48">
-    <circle cx="24" cy="24" r="20"/><path d="M30 18L18 30M18 18l12 12"/>
-  </svg>`;
-}
-function iconSpinner(): string {
-  return `<svg class="spin" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" width="48" height="48">
-    <circle cx="24" cy="24" r="18" stroke-opacity="0.2"/><path d="M24 6a18 18 0 0 1 18 18"/>
-  </svg>`;
 }
 
 // ---- Mount ----------------------------------------------------------------
@@ -105,10 +84,10 @@ export function mount(root: HTMLElement): () => void {
   function cardIdle(): string {
     return `
       <div class="upload-card upload-zone" id="drop-zone" tabindex="0" role="button" aria-label="Upload a video file">
-        <div class="upload-icon">${iconUpload()}</div>
-        <p class="upload-headline">Drop a video here</p>
+        <div class="upload-icon">${icon("upload")}</div>
+        <h1 class="upload-headline">Drop a video here</h1>
         <p class="upload-sub">or <span class="link-text" id="browse-trigger">click to browse</span></p>
-        <p class="upload-hint">${ALLOWED_EXTS.map((e) => e.slice(1).toUpperCase()).join(" · ")} · up to 4 GB</p>
+        <p class="upload-hint">${ALLOWED_EXTS.map((e) => e.slice(1).toUpperCase()).join(", ")}. Up to 4 GB.</p>
       </div>`;
   }
 
@@ -117,6 +96,7 @@ export function mount(root: HTMLElement): () => void {
     const rateStr = s.rate > 0 ? ` · ${humanBytes(s.rate)}/s` : "";
     return `
       <div class="upload-card">
+        <h1 class="sr-only">Uploading video</h1>
         <p class="upload-filename" title="${esc(s.file.name)}">${esc(s.file.name)}</p>
         <div class="progress-bar-track" role="progressbar" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100" aria-label="Upload progress">
           <div class="progress-bar-fill" style="width: ${pct}%"></div>
@@ -129,8 +109,8 @@ export function mount(root: HTMLElement): () => void {
   function cardWaking(): string {
     return `
       <div class="upload-card">
-        <div class="upload-icon">${iconSpinner()}</div>
-        <p class="upload-headline">Waking the backend…</p>
+        <div class="upload-icon spin">${icon("spinner")}</div>
+        <h1 class="upload-headline">Waking the backend…</h1>
         <p class="upload-sub">The API can sleep after idle time. Your upload will start automatically when it is ready.</p>
         <button class="btn btn-ghost" id="cancel-wake-btn" type="button">Cancel</button>
       </div>`;
@@ -139,8 +119,8 @@ export function mount(root: HTMLElement): () => void {
   function cardDedup(s: Extract<State, { tag: "dedup" }>): string {
     return `
       <div class="upload-card">
-        <div class="upload-icon upload-icon--success">${iconCheck()}</div>
-        <p class="upload-headline">Already transcoded</p>
+        <div class="upload-icon upload-icon--success">${icon("check")}</div>
+        <h1 class="upload-headline">Already transcoded</h1>
         <p class="upload-sub">This exact file was processed before.</p>
         <a href="/job?id=${esc(s.jobId)}" class="btn btn-primary">View results →</a>
         <button class="btn btn-ghost" id="restart-btn" type="button">Upload a different file</button>
@@ -150,8 +130,8 @@ export function mount(root: HTMLElement): () => void {
   function cardRejected(s: Extract<State, { tag: "rejected" }>): string {
     return `
       <div class="upload-card">
-        <div class="upload-icon upload-icon--danger">${iconX()}</div>
-        <p class="upload-headline">${errorHeadline(s.code)}</p>
+        <div class="upload-icon upload-icon--danger">${icon("error")}</div>
+        <h1 class="upload-headline">${errorHeadline(s.code)}</h1>
         <p class="upload-sub">${esc(s.message)}</p>
         <button class="btn btn-primary" id="restart-btn" type="button">Try again</button>
       </div>`;
@@ -201,7 +181,7 @@ export function mount(root: HTMLElement): () => void {
       setState({
         tag: "rejected",
         code: "UPLOAD_TOO_LARGE",
-        message: `File is ${humanBytes(file.size)} — the limit is 4 GB.`,
+        message: `File is ${humanBytes(file.size)}. The limit is 4 GB.`,
       });
       return;
     }
