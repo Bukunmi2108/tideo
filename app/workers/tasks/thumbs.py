@@ -1,8 +1,11 @@
+import json
 import math
+from collections.abc import Callable
 from dataclasses import dataclass
-import json, subprocess
 from pathlib import Path
+
 from app.storage import paths
+from app.workers.process import run_process
 
 
 @dataclass(frozen=True)
@@ -29,27 +32,54 @@ def _sprite_argv(src, plan: SpritePlan, out):
     return ["ffmpeg", "-nostdin", "-y", "-i", src, "-vf", vf, "-frames:v", "1", out]
 
 def _image_size(path: str) -> tuple[int, int]:
-    s = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "stream=width,height",
-                        "-of", "json", path], capture_output=True, text=True)
+    s = run_process(
+        ["ffprobe", "-v", "error", "-show_entries", "stream=width,height", "-of", "json", path],
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
     streams = json.loads(s.stdout or "{}").get("streams", [])
     if not streams or int(streams[0].get("width", 0)) == 0:
         raise RuntimeError(f"invalid image: {path}")
     return int(streams[0]["width"]), int(streams[0]["height"])
 
 
-def write_poster(out_dir: Path, src: str, duration: float) -> None:
+def write_poster(
+    out_dir: Path,
+    src: str,
+    duration: float,
+    *,
+    cancelled: Callable[[], bool] | None = None,
+) -> None:
     with paths.atomic_path(out_dir / "poster.jpg") as tmp:
-        subprocess.run(_poster_argv(src, duration, str(tmp)), check=True)
+        run_process(
+            _poster_argv(src, duration, str(tmp)),
+            check=True,
+            timeout=230,
+            cancelled=cancelled,
+        )
         _image_size(str(tmp))
 
 
-def write_sprite(out_dir: Path, src: str, duration: float, fps: float) -> dict:
+def write_sprite(
+    out_dir: Path,
+    src: str,
+    duration: float,
+    fps: float,
+    *,
+    cancelled: Callable[[], bool] | None = None,
+) -> dict:
     """Build the scrub sprite and return its storyboard geometry — enough for a client to map a
     timestamp to a tile (background-position) for hover-scrub previews. tile size is read back from the
     produced sheet so it stays correct across source aspect ratios."""
     plan = sprite_plan(duration, fps or 30.0)
     with paths.atomic_path(out_dir / "sprite.jpg") as tmp:
-        subprocess.run(_sprite_argv(src, plan, str(tmp)), check=True)
+        run_process(
+            _sprite_argv(src, plan, str(tmp)),
+            check=True,
+            timeout=230,
+            cancelled=cancelled,
+        )
         sheet_w, sheet_h = _image_size(str(tmp))
     return {
         "url": "sprite.jpg",

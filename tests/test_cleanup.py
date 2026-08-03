@@ -9,9 +9,13 @@ NOW = datetime(2026, 6, 17, 12, 0, tzinfo=UTC)
 class FakeRedis:
     def __init__(self):
         self.deleted = []
+        self.sets = {}
 
     def delete(self, k):
         self.deleted.append(k)
+
+    def smembers(self, k):
+        return set(self.sets.get(k, set()))
 
     def eval(self, _script, key_count, content_key, _owner):
         assert key_count == 1
@@ -197,7 +201,7 @@ def test_temp_sweep_collects_atomic_path_files_not_real_artifacts(monkeypatch, t
 def test_sweep_forwards_one_now_to_each_helper_and_reports(monkeypatch):
     seen = []
     monkeypatch.setattr(cleanup, "_expire_outputs", lambda now: seen.append(now) or (2, 1))
-    monkeypatch.setattr(cleanup, "_sweep_stale_sources", lambda now: seen.append(now) or 3)
+    monkeypatch.setattr(cleanup, "_sweep_stale_sources", lambda now: seen.append(now) or (3, 7))
     monkeypatch.setattr(cleanup, "_sweep_stale_active", lambda now: 6)
     monkeypatch.setattr(cleanup, "_sweep_temp_dirs", lambda now: seen.append(now) or 4)
     monkeypatch.setattr(cleanup.terminal_outbox, "drain", lambda _r: 5)
@@ -211,6 +215,7 @@ def test_sweep_forwards_one_now_to_each_helper_and_reports(monkeypatch):
         "failed": 1,
         "stale_active": 6,
         "sources": 3,
+        "failed_outputs": 7,
         "temps": 4,
     }
     assert len(seen) == 3 and seen[0] == seen[1] == seen[2]   # one `now` captured, shared by all three
@@ -221,9 +226,59 @@ def test_sweep_forwards_one_now_to_each_helper_and_reports(monkeypatch):
 def test_stale_source_sweep_removes_upload_dirs(monkeypatch, tmp_path):
     (tmp_path / "uploads" / "jf").mkdir(parents=True)
     monkeypatch.setattr(cleanup.config, "data_dir", tmp_path)   # uploads_dir = data_dir/"uploads"
-    monkeypatch.setattr(cleanup.db, "list_stale_sources", lambda cutoff: [{"job_id": "jf"}, {"job_id": "gone"}])
+    monkeypatch.setattr(
+        cleanup.db,
+        "list_stale_sources",
+        lambda cutoff: [
+            {"job_id": "jf", "status": "done"},
+            {"job_id": "gone", "status": "done"},
+        ],
+    )
+    fake = FakeRedis()
+    monkeypatch.setattr(cleanup, "get_sync_client", lambda: fake)
 
-    removed = cleanup._sweep_stale_sources(NOW)
+    removed, failed_outputs = cleanup._sweep_stale_sources(NOW)
 
     assert removed == 1                       # "jf" removed; "gone" (no dir) silently skipped
+    assert failed_outputs == 0
     assert not (tmp_path / "uploads" / "jf").exists()
+    assert set(fake.deleted) == {"src:jf", "src:gone"}
+
+
+def test_stale_storage_sweep_removes_only_failed_outputs(monkeypatch, tmp_path):
+    for job_id in ("done", "failed"):
+        (tmp_path / "uploads" / job_id).mkdir(parents=True)
+        (tmp_path / "output" / job_id).mkdir(parents=True)
+    monkeypatch.setattr(cleanup.config, "data_dir", tmp_path)
+    monkeypatch.setattr(
+        cleanup.db,
+        "list_stale_sources",
+        lambda cutoff: [
+            {"job_id": "done", "status": "done"},
+            {"job_id": "failed", "status": "failed"},
+        ],
+    )
+    monkeypatch.setattr(cleanup, "get_sync_client", lambda: FakeRedis())
+
+    sources, failed_outputs = cleanup._sweep_stale_sources(NOW)
+
+    assert (sources, failed_outputs) == (2, 1)
+    assert (tmp_path / "output" / "done").exists()
+    assert not (tmp_path / "output" / "failed").exists()
+
+
+def test_stale_source_sweep_keeps_upload_with_active_consumer(monkeypatch, tmp_path):
+    upload = tmp_path / "uploads" / "done"
+    upload.mkdir(parents=True)
+    monkeypatch.setattr(cleanup.config, "data_dir", tmp_path)
+    monkeypatch.setattr(
+        cleanup.db,
+        "list_stale_sources",
+        lambda cutoff: [{"job_id": "done", "status": "done"}],
+    )
+    fake = FakeRedis()
+    fake.sets["src:done"] = {"transcribe"}
+    monkeypatch.setattr(cleanup, "get_sync_client", lambda: fake)
+
+    assert cleanup._sweep_stale_sources(NOW) == (0, 0)
+    assert upload.exists()

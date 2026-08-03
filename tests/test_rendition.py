@@ -1,6 +1,9 @@
 from typing import Any, cast
 
+import pytest
+
 from app.events.topics import JOB_STARTED, RENDITION_STARTED
+from app.workers.cancellation import CancellationUnavailable
 from app.workers.tasks import rendition
 
 
@@ -21,6 +24,25 @@ def test_cancelled_rendition_never_starts_ffmpeg(monkeypatch):
         "status": "cancelled",
         "job_id": "j1",
     }
+
+
+def test_unknown_cancellation_state_retries_before_starting(monkeypatch):
+    class ControlRetry(Exception):
+        pass
+
+    monkeypatch.setattr(
+        rendition,
+        "is_cancelled",
+        lambda _jid: (_ for _ in ()).throw(CancellationUnavailable("j1")),
+    )
+    monkeypatch.setattr(
+        rendition.rendition,
+        "retry",
+        lambda **_kwargs: (_ for _ in ()).throw(ControlRetry()),
+    )
+
+    with pytest.raises(ControlRetry):
+        _run_rendition("j1", "720p", "/src.mp4", {})
 
 
 def test_rendition_started_follows_job_started(monkeypatch):

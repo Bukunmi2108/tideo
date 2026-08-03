@@ -53,6 +53,20 @@ class FakeRedis:
         return True
 
     def eval(self, script, key_count, *args):
+        if key_count == 1:
+            source_key, first, *rest = args
+            consumers = self.sets.setdefault(source_key, set())
+            if "for i = 2" in script:
+                consumers.discard(first)
+                consumers.update(rest[:-1])
+                return len(consumers)
+            if first not in consumers:
+                return 0
+            consumers.remove(first)
+            if not consumers:
+                consumers.add(rest[0])
+                return 1
+            return 0
         job_key, _counts, outbox, _deadlines, expected, target, _old_active, _new_active, job_id, terminal, *extra = args
         rec = self.hashes[job_key]
         if rec.get("status") != expected:
@@ -141,13 +155,22 @@ def test_transcribe_dispatched_alongside_and_marked_processing(monkeypatch):
     monkeypatch.setattr(dispatch.celery_app, "signature",
                         lambda name, args=None: fired.append((name, args)) or Sig())
     monkeypatch.setattr(dispatch, "group", lambda gen: list(gen))
-    monkeypatch.setattr(dispatch, "chord", lambda header: lambda callback: None)
+    claims_seen_at_chord = []
+    monkeypatch.setattr(
+        dispatch,
+        "chord",
+        lambda header: lambda callback: claims_seen_at_chord.append(set(fake.sets["src:j1"])),
+    )
 
     dispatch.dispatch_job("j1", "evt-1", ["720p"], True)
     assert json.loads(fake.hashes["job:j1"]["subtitles"]) == {"status": "processing"}
     assert ("app.workers.tasks.transcribe.transcribe", ["j1", "/u/s.mp4", json.loads(SRC_META)]) in fired
     assert ("set", {"task_id": "stt"}) in fired
     assert "async" in fired                                   # actually enqueued
+    assert claims_seen_at_chord == [{"package", "transcribe"}]
+    rendition_options = next(options for tag, options in fired if tag == "set" and options.get("task_id") == "r0")
+    assert rendition_options["soft_time_limit"] == 90
+    assert rendition_options["time_limit"] == 150
 
 
 def test_no_transcribe_when_subtitles_not_requested(monkeypatch):
@@ -170,6 +193,7 @@ def test_no_transcribe_when_subtitles_not_requested(monkeypatch):
     dispatch.dispatch_job("j1", "evt-1", ["720p"], False)
     assert "subtitles" not in fake.hashes["job:j1"]
     assert dispatch.TRANSCRIBE not in names
+    assert fake.sets["src:j1"] == {"package"}
 
 
 def test_post_chord_transcribe_failure_does_not_redispatch_ladder(monkeypatch):
@@ -222,6 +246,7 @@ def test_transcribe_is_not_submitted_when_cancel_wins_after_chord_reservation(mo
 
     assert dispatch.TRANSCRIBE not in names
     assert "subtitles" not in fake.hashes["job:j1"]
+    assert fake.sets["src:j1"] == {"package"}
 
 
 # ---------- fail_job (link_error handler) ----------

@@ -1,3 +1,5 @@
+from redis.exceptions import RedisError
+
 from app.core.logging import get_logger
 from app.storage.state import get_sync_client
 
@@ -5,6 +7,10 @@ log = get_logger()
 
 
 class JobCancelled(Exception):
+    pass
+
+
+class CancellationUnavailable(Exception):
     pass
 
 
@@ -16,6 +22,7 @@ def is_cancelled(job_id: str) -> bool:
             r.exists(f"cancel:{job_id}")
             or r.hget(f"job:{job_id}", "status") == "cancelled"
         )
-    except Exception:
+    except (RedisError, OSError) as exc:
+        # Unknown cancellation state must stop work; committing would make cancel non-authoritative.
         log.warning("cancel_check_failed", job_id=job_id, exc_info=True)
-        return False
+        raise CancellationUnavailable(job_id) from exc

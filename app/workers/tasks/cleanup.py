@@ -2,6 +2,8 @@ import shutil
 from datetime import UTC, datetime, timedelta
 from typing import cast
 
+from redis.exceptions import RedisError
+
 from app.core.config import config
 from app.core.logging import get_logger
 from app.domain.errors import JOB_STALE, LIFECYCLE
@@ -13,6 +15,7 @@ from app.storage.job_control import transition_status
 from app.storage.state import ACTIVE_DEADLINES, get_sync_client
 from app.workers.base import CleanupTask
 from app.workers.celery_app import app
+from app.workers.source import RECLAIM_MARKER
 
 log = get_logger()
 ACTIVE_BATCH_SIZE = 100
@@ -46,20 +49,46 @@ def _expire_outputs(now: datetime) -> tuple[int, int]:
     return expired, failed
 
 
-def _sweep_stale_sources(now: datetime) -> int:
-    """Reclaim source uploads of failed/cancelled jobs past the grace window (success deletes its own)."""
+def _sweep_stale_sources(now: datetime) -> tuple[int, int]:
+    """Reclaim terminal-job uploads and partial outputs that have no serving value."""
     cutoff = now - timedelta(seconds=config.source_grace_seconds)
-    removed = 0
+    r = get_sync_client()
+    sources = failed_outputs = 0
     for row in db.list_stale_sources(cutoff):
-        src_dir = config.uploads_dir / row["job_id"]
-        if not src_dir.exists():
+        job_id = row["job_id"]
+        src_dir = config.uploads_dir / job_id
+        source_gone = False
+        source_reclaimable = False
+        try:
+            claims = set(r.smembers(f"src:{job_id}"))
+            source_reclaimable = not claims - {RECLAIM_MARKER}
+        except (RedisError, OSError):
+            log.warning("source_claim_read_failed", job_id=job_id)
+        if source_reclaimable:
+            try:
+                shutil.rmtree(src_dir)
+                sources += 1
+                source_gone = True
+            except FileNotFoundError:
+                source_gone = True
+            except OSError:
+                log.warning("source_reclaim_failed", job_id=job_id, scope="sweep")
+        if source_gone:
+            try:
+                r.delete(f"src:{job_id}")
+            except (RedisError, OSError):
+                log.warning("source_claim_cleanup_failed", job_id=job_id)
+
+        if row["status"] not in ("failed", "cancelled"):
             continue
         try:
-            shutil.rmtree(src_dir)
-            removed += 1
+            shutil.rmtree(config.output_dir / job_id)
+            failed_outputs += 1
+        except FileNotFoundError:
+            pass
         except OSError:
-            log.warning("source_reclaim_failed", job_id=row["job_id"], scope="sweep")
-    return removed
+            log.warning("failed_output_reclaim_failed", job_id=job_id)
+    return sources, failed_outputs
 
 
 def _sweep_stale_active(now: datetime) -> int:
@@ -98,13 +127,17 @@ def _sweep_stale_active(now: datetime) -> int:
         content_hash = cast(str | None, rec.get("content_hash"))
         if content_hash:
             dedupe.release_owner(r, content_hash, job_id)
+        source_gone = False
         for path in (config.uploads_dir / job_id, config.output_dir / job_id):
             try:
                 shutil.rmtree(path)
+                source_gone = source_gone or path.parent == config.uploads_dir
             except FileNotFoundError:
-                pass
+                source_gone = source_gone or path.parent == config.uploads_dir
             except OSError:
                 log.warning("stale_active_reclaim_failed", job_id=job_id, path=str(path))
+        if source_gone:
+            r.delete(f"src:{job_id}")
         failed += 1
     return failed
 
@@ -147,9 +180,11 @@ def sweep() -> dict:
     """Run the recoverable storage lifecycle work, including the boot-time catch-up path."""
     now = datetime.now(UTC)
     expired, failed = _expire_outputs(now)
+    sources, failed_outputs = _sweep_stale_sources(now)
     result = {"projected": terminal_outbox.drain(get_sync_client()),
               "expired": expired, "failed": failed,
               "stale_active": _sweep_stale_active(now),
-              "sources": _sweep_stale_sources(now), "temps": _sweep_temp_dirs(now)}
+              "sources": sources, "failed_outputs": failed_outputs,
+              "temps": _sweep_temp_dirs(now)}
     log.info("cleanup_sweep_completed", **result)
     return result

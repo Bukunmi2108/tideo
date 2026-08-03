@@ -1,7 +1,7 @@
 from pathlib import Path
 
 import pytest
-from celery.exceptions import Retry
+from celery.exceptions import Retry, SoftTimeLimitExceeded
 
 from app.core.ratelimit import Allowed, RetryIn
 from app.domain.errors import (
@@ -78,8 +78,9 @@ def harness(tmp_path, monkeypatch):
     monkeypatch.setattr(T, "get_sync_client", lambda: redis)
     monkeypatch.setattr(T, "is_cancelled", lambda _jid: False)
     monkeypatch.setattr(T, "acquire", lambda *a, **k: Allowed())
-    monkeypatch.setattr(T, "extract_audio", lambda src, out: None)
+    monkeypatch.setattr(T, "extract_audio", lambda src, out, **_kwargs: None)
     monkeypatch.setattr(T, "attach_subtitles", lambda jid, dur: True)
+    monkeypatch.setattr(T, "release_source", lambda *_args: None)
 
     def store_status(r, job_id, payload):
         status_writes.append(payload)
@@ -135,7 +136,7 @@ def test_rate_limit_reenqueues_with_countdown(harness, monkeypatch):
     job_dir, _, _ = harness
     calls = []
 
-    def extract(_src, out):
+    def extract(_src, out, **_kwargs):
         calls.append("extract")
         Path(out).touch()
 
@@ -153,7 +154,7 @@ def test_rate_limit_reenqueues_with_countdown(harness, monkeypatch):
     with pytest.raises(_Retry) as ei:
         T.transcribe("j", "/src.mp4", AUDIO_META)
     assert ei.value.countdown == 7.5
-    assert calls == ["extract", "acquire"]
+    assert calls == ["acquire"]
     assert not (job_dir / "audio.wav").exists()
 
 
@@ -192,7 +193,11 @@ def test_unexpected_exception_still_records_terminal_status(harness, monkeypatch
 
 def test_audio_extraction_failure_fails_soft(harness, monkeypatch):
     _, _, writes = harness
-    monkeypatch.setattr(T, "extract_audio", lambda src, out: (_ for _ in ()).throw(RuntimeError("ffmpeg")))
+    monkeypatch.setattr(
+        T,
+        "extract_audio",
+        lambda src, out, **_kwargs: (_ for _ in ()).throw(RuntimeError("ffmpeg")),
+    )
     monkeypatch.setattr(
         T,
         "transcribe_audio",
@@ -201,3 +206,59 @@ def test_audio_extraction_failure_fails_soft(harness, monkeypatch):
     out = T.transcribe("j", "/src.mp4", AUDIO_META)
     assert out == {"status": "failed"}
     assert writes[-1]["code"] == STT_BAD_AUDIO
+
+
+def test_soft_timeout_is_not_misclassified_as_bad_audio(harness, monkeypatch):
+    _, _, writes = harness
+    monkeypatch.setattr(
+        T,
+        "extract_audio",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(SoftTimeLimitExceeded()),
+    )
+
+    out = T.transcribe("j", "/src.mp4", AUDIO_META)
+
+    assert out == {"status": "failed"}
+    assert writes[-1] == {
+        "status": "failed",
+        "code": STT_UNAVAILABLE,
+        "reason": "transcription timed out",
+    }
+
+
+def test_status_store_outage_retries_without_releasing_source(harness, monkeypatch):
+    _, _, _ = harness
+    released = []
+    monkeypatch.setattr(
+        T.terminal_outbox,
+        "store_subtitles",
+        lambda *_a, **_k: (_ for _ in ()).throw(ConnectionError("redis down")),
+    )
+    monkeypatch.setattr(T, "release_source", lambda *_args: released.append(True))
+
+    with pytest.raises(_Retry):
+        T.transcribe("j", "/src.mp4", NO_AUDIO_META)
+
+    assert released == []
+
+
+def test_status_client_outage_retries(harness, monkeypatch):
+    monkeypatch.setattr(
+        T,
+        "get_sync_client",
+        lambda: (_ for _ in ()).throw(ConnectionError("redis down")),
+    )
+
+    with pytest.raises(_Retry):
+        T.transcribe("j", "/src.mp4", NO_AUDIO_META)
+
+
+def test_cancel_check_outage_retries(harness, monkeypatch):
+    monkeypatch.setattr(
+        T,
+        "is_cancelled",
+        lambda _jid: (_ for _ in ()).throw(T.CancellationUnavailable("j")),
+    )
+
+    with pytest.raises(_Retry):
+        T.transcribe("j", "/src.mp4", AUDIO_META)

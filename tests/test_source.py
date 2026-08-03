@@ -24,6 +24,22 @@ class FakeRedis:
     def expire(self, k, ttl):
         self.expires[k] = ttl
 
+    def eval(self, script, _key_count, key, *args):
+        if script == S._CLAIM_SOURCE:
+            marker, *consumers, ttl = args
+            self.srem(key, marker)
+            self.sadd(key, *consumers)
+            self.expire(key, ttl)
+            return self.scard(key)
+        consumer, marker, ttl = args
+        if not self.srem(key, consumer):
+            return 0
+        if self.scard(key) == 0:
+            self.sadd(key, marker)
+            self.expire(key, ttl)
+            return 1
+        return 0
+
 
 def _patch_reclaim(monkeypatch):
     reclaimed = []
@@ -81,11 +97,11 @@ def test_claim_sets_ttl_so_a_dead_task_cant_leak_the_key(monkeypatch):
     assert r.expires["src:j"] > 0
 
 
-def test_reclaim_failure_still_clears_key_and_does_not_raise(monkeypatch):
+def test_reclaim_failure_keeps_a_retry_marker_and_does_not_raise(monkeypatch):
     def boom(_p):
         raise OSError("disk")
     monkeypatch.setattr(S.shutil, "rmtree", boom)
     r = FakeRedis()
     S.claim_source(r, "j", "package")
-    S.release_source(r, "j", "package")              # OSError is logged, swallowed; key still cleared
-    assert "src:j" not in r.sets
+    S.release_source(r, "j", "package")
+    assert S.RECLAIM_MARKER in r.sets["src:j"]

@@ -1,3 +1,5 @@
+import pytest
+
 from app.workers import cancellation
 
 
@@ -23,6 +25,7 @@ def test_cancelled_status_survives_flag_expiry(monkeypatch):
     assert cancellation.is_cancelled("j1") is True
 
 
-def test_cancel_check_fails_open_when_redis_is_unavailable(monkeypatch):
+def test_cancel_check_stops_work_when_redis_is_unavailable(monkeypatch):
     monkeypatch.setattr(cancellation, "get_sync_client", lambda: (_ for _ in ()).throw(ConnectionError("down")))
-    assert cancellation.is_cancelled("j1") is False
+    with pytest.raises(cancellation.CancellationUnavailable):
+        cancellation.is_cancelled("j1")

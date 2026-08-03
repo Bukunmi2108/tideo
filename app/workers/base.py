@@ -1,4 +1,5 @@
 from celery import Task
+
 from app.core.config import config
 
 
@@ -7,10 +8,12 @@ class InspectTask(Task):
 
 
 class PackageTask(Task):
-    time_limit = 60
+    soft_time_limit = 240
+    time_limit = 300
 
 
 class TranscribeTask(Task):
+    soft_time_limit = 540
     time_limit = 600
 
 
