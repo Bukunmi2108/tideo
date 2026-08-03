@@ -102,6 +102,21 @@ def test_store_event_transient_error_reraises_for_retry():
     assert conn.rolled_back
 
 
+def test_heartbeat_has_a_bounded_ttl(monkeypatch):
+    calls = []
+
+    class Redis:
+        def set(self, key, value, *, ex):
+            calls.append((key, value, ex))
+
+    monkeypatch.setattr(audit, "get_sync_client", Redis)
+
+    audit._heartbeat()
+
+    assert calls[0][0] == audit.AUDIT_HEARTBEAT
+    assert calls[0][2] == audit.config.dispatcher_heartbeat_ttl
+
+
 class Message:
     def __init__(self, value):
         self._value = value
@@ -165,6 +180,7 @@ def test_transient_store_failure_rewinds_and_reconnects_before_commit(monkeypatc
     monkeypatch.setattr(audit.psycopg2, "connect", lambda _dsn: connections.pop(0))
     monkeypatch.setattr(audit, "ensure_schema", lambda _conn: None)
     monkeypatch.setattr(audit, "store_event", store)
+    monkeypatch.setattr(audit, "_heartbeat", lambda: None)
     monkeypatch.setattr(audit.signal, "signal", lambda *_args: None)
     monkeypatch.setattr(audit.time, "sleep", lambda _seconds: None)
     monkeypatch.setattr(audit, "_running", True)
@@ -202,6 +218,7 @@ def test_reconnect_keeps_retrying_while_postgres_is_unavailable(monkeypatch):
     monkeypatch.setattr(audit.psycopg2, "connect", connect)
     monkeypatch.setattr(audit, "ensure_schema", lambda _conn: None)
     monkeypatch.setattr(audit, "store_event", store)
+    monkeypatch.setattr(audit, "_heartbeat", lambda: None)
     monkeypatch.setattr(audit.signal, "signal", lambda *_args: None)
     monkeypatch.setattr(audit.time, "sleep", sleeps.append)
     monkeypatch.setattr(audit, "_running", True)

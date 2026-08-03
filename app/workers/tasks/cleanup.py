@@ -19,6 +19,8 @@ from app.workers.source import RECLAIM_MARKER
 
 log = get_logger()
 ACTIVE_BATCH_SIZE = 100
+BEAT_HEARTBEAT = "beat:heartbeat"
+BEAT_HEARTBEAT_TTL = 180
 
 
 def _expire_outputs(now: datetime) -> tuple[int, int]:
@@ -171,7 +173,9 @@ def _sweep_temp_dirs(now: datetime) -> int:
 
 @app.task(base=CleanupTask)
 def drain_terminal() -> dict:
-    projected = terminal_outbox.drain(get_sync_client())
+    r = get_sync_client()
+    projected = terminal_outbox.drain(r)
+    r.set(BEAT_HEARTBEAT, datetime.now(UTC).isoformat(), ex=BEAT_HEARTBEAT_TTL)
     return {"projected": projected}
 
 

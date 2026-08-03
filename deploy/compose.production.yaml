@@ -6,7 +6,7 @@ x-sleep-labels: &sleep-labels
 
 services:
   redis:
-    image: redis:7-alpine
+    image: redis:7-alpine@sha256:e7723ff73d963f5cc6d9c4643ea3d989527a402a319239054e9472a7fb9219a2
     container_name: workspace-tideo-redis
     command:
       - redis-server
@@ -39,7 +39,7 @@ services:
       - no-new-privileges:true
 
   rabbitmq:
-    image: rabbitmq:4.0-management-alpine
+    image: rabbitmq:4.0-management-alpine@sha256:b526483781791227f71e7dd38516241f48540615440de57511e4feaefb32f7ce
     container_name: workspace-tideo-rabbitmq
     hostname: workspace-tideo-rabbitmq
     env_file:
@@ -63,7 +63,7 @@ services:
       - no-new-privileges:true
 
   kafka:
-    image: confluentinc/cp-kafka:7.8.0
+    image: confluentinc/cp-kafka:7.8.0@sha256:adc392d28a1e99e8c9a1ec7f087e9e91041837b35b8b7cc8b8a691b82dd581b0
     container_name: workspace-tideo-kafka
     hostname: kafka
     env_file:
@@ -281,6 +281,8 @@ services:
       - internal
       - workspace_data
     depends_on:
+      redis:
+        condition: service_healthy
       kafka:
         condition: service_healthy
     mem_limit: 384m

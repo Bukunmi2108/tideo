@@ -10,12 +10,16 @@ class FakeRedis:
     def __init__(self):
         self.deleted = []
         self.sets = {}
+        self.set_calls = []
 
     def delete(self, k):
         self.deleted.append(k)
 
     def smembers(self, k):
         return set(self.sets.get(k, set()))
+
+    def set(self, key, value, ex=None):
+        self.set_calls.append((key, value, ex))
 
     def eval(self, _script, key_count, content_key, _owner):
         assert key_count == 1
@@ -219,6 +223,16 @@ def test_sweep_forwards_one_now_to_each_helper_and_reports(monkeypatch):
         "temps": 4,
     }
     assert len(seen) == 3 and seen[0] == seen[1] == seen[2]   # one `now` captured, shared by all three
+
+
+def test_terminal_drain_records_beat_delivery(monkeypatch):
+    fake = FakeRedis()
+    monkeypatch.setattr(cleanup, "get_sync_client", lambda: fake)
+    monkeypatch.setattr(cleanup.terminal_outbox, "drain", lambda _r: 2)
+
+    assert cleanup.drain_terminal() == {"projected": 2}
+    assert fake.set_calls[0][0] == cleanup.BEAT_HEARTBEAT
+    assert fake.set_calls[0][2] == cleanup.BEAT_HEARTBEAT_TTL
 
 
 # ---------- _sweep_stale_sources ----------

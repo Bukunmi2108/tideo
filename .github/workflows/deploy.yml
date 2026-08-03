@@ -14,15 +14,16 @@ permissions:
 jobs:
   verify:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     env:
       REVISION: ${{ inputs.revision }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           ref: ${{ inputs.revision }}
       - run: test "$(git rev-parse HEAD)" = "$REVISION"
 
-      - uses: astral-sh/setup-uv@v8.1.0
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
         with:
           enable-cache: true
       - run: uv sync --frozen
@@ -36,8 +37,17 @@ jobs:
           --project-directory .
           -f deploy/compose.production.yaml
           config --quiet
+      - run: >-
+          TIDEO_SOURCE_ROOT=.
+          TIDEO_ENV_FILE=deploy/.env.example
+          TIDEO_IMAGE_TAG=$REVISION
+          docker compose
+          --env-file deploy/.env.example
+          --project-directory .
+          -f deploy/compose.production.yaml
+          build api worker-heavy
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: 24
           cache: npm
@@ -52,13 +62,14 @@ jobs:
   deploy:
     needs: verify
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     environment: production
     env:
       REVISION: ${{ inputs.revision }}
       VPS_HOST: ${{ vars.CONTABO_VPS_HOST }}
       VPS_USER: ${{ vars.CONTABO_VPS_USER }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           ref: ${{ inputs.revision }}
       - name: Configure deployment SSH key
