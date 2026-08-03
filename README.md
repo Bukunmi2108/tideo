@@ -91,7 +91,12 @@ cd frontend && npm install && npm run dev # :5173, points at the local API
 make fixtures
 ```
 
-Tests: `uv run pytest` (backend) · `npm test` in `frontend/` (vitest).
+Tests: `uv run pytest` (backend) · `npm run check` in `frontend/` (tests, typecheck/build, and audit).
+
+The Vercel project root is `frontend/`; `frontend/vercel.json` owns the SPA fallback and browser
+security headers. Its CSP temporarily allows inline styles because progress, storyboard, and player
+positioning use element style attributes. Remove that exception when those styles move behind classes
+or CSS custom properties during the design-system phase.
 
 ## Workspace VPS
 
