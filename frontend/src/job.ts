@@ -471,7 +471,7 @@ function progressBar(preset: string): string {
   return `
     <div class="bar-row" data-bar="${esc(preset)}">
       <span class="bar-label">${esc(preset)}</span>
-      <div class="progress-bar-track"><div class="progress-bar-fill" style="width:${pct}%"></div></div>
+      <div class="progress-bar-track"><div class="progress-bar-fill" style="transform: scaleX(${pct / 100})"></div></div>
       <span class="bar-pct">${pct}%</span>
     </div>
   `;
@@ -482,8 +482,8 @@ function updateBars(): void {
     const row = appEl.querySelector(`[data-bar="${CSS.escape(p)}"]`);
     if (!row) return render(); // bar set changed — rebuild
     const pct = Math.round(progress[p] ?? 0);
-    row.querySelector<HTMLElement>(".progress-bar-fill")!.style.width =
-      `${pct}%`;
+    row.querySelector<HTMLElement>(".progress-bar-fill")!.style.transform =
+      `scaleX(${pct / 100})`;
     row.querySelector<HTMLElement>(".bar-pct")!.textContent = `${pct}%`;
   }
   const status = document.getElementById("progress-status");
