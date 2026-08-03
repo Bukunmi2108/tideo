@@ -70,6 +70,7 @@ export interface JobResponse {
   progress?: Record<string, number>;
   results?: JobResults;
   error?: JobError;
+  expires_at?: string | null;
 }
 
 export interface JobSummary {
@@ -81,6 +82,8 @@ export interface JobSummary {
   finished_at: string | null;
   expires_at: string | null;
   poster: string | null;
+  presets?: string[] | null;
+  progress?: Record<string, number> | null;
 }
 
 export interface JobListResponse {
