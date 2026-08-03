@@ -7,6 +7,7 @@ import {
   type JobResults,
   type JobError,
 } from "./api";
+import { guestSession, sessionHeaders } from "./session";
 
 // ---- Frame shapes (mirrors app/api/ws.py) ---------------------------------
 
@@ -97,6 +98,7 @@ export function watch(jobId: string, handlers: WatchHandlers): () => void {
     ws = new WebSocket(wsUrl(jobId));
 
     ws.onopen = () => {
+      ws?.send(JSON.stringify({ type: "auth", session: guestSession() }));
       setMode("live");
       clear(pollTimer);
       pollTimer = null;
@@ -142,7 +144,9 @@ export function watch(jobId: string, handlers: WatchHandlers): () => void {
   async function poll(): Promise<void> {
     if (dead || terminal) return;
     try {
-      const resp = await fetch(`${apiBase()}/jobs/${jobId}`);
+      const resp = await fetch(`${apiBase()}/jobs/${jobId}`, {
+        headers: sessionHeaders(),
+      });
       if (resp.ok) {
         const job = (await resp.json()) as JobResponse;
         handlers.onSnapshot({

@@ -131,6 +131,35 @@ a:focus-visible,
   background: var(--accent-glow);
 }
 
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.skip-link {
+  position: fixed;
+  top: var(--sp-3);
+  left: var(--sp-3);
+  z-index: 100;
+  padding: var(--sp-2) var(--sp-4);
+  border-radius: var(--r-sm);
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-weight: 700;
+  transform: translateY(-200%);
+  transition: transform var(--transition);
+}
+.skip-link:focus {
+  transform: translateY(0);
+}
+
 /* ---- Header --------------------------------------------------------------- */
 
 .site-header {

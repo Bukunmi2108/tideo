@@ -34,6 +34,7 @@ def test_stale_active_job_is_failed_and_its_storage_is_reclaimed(monkeypatch, tm
             self.hash = {
                 "status": "transcoding",
                 "content_hash": "sha",
+                "owner_session_hash": "owner-a",
                 "rendition_ids": "[]",
             }
 
@@ -68,7 +69,7 @@ def test_stale_active_job_is_failed_and_its_storage_is_reclaimed(monkeypatch, tm
     assert not (tmp_path / "uploads" / "j1").exists()
     assert not (tmp_path / "output" / "j1").exists()
     assert redis.cancel[0] == "cancel:j1"
-    assert "content:sha" in redis.deleted
+    assert "content:owner-a:sha" in redis.deleted
 
 
 def _out(tmp_path, job_id):
@@ -83,7 +84,17 @@ def _out(tmp_path, job_id):
 def test_expire_deletes_dir_dedupe_key_marks_and_emits(monkeypatch, tmp_path):
     _out(tmp_path, "j1")
     monkeypatch.setattr(cleanup.config, "data_dir", tmp_path)
-    monkeypatch.setattr(cleanup.db, "list_expirable", lambda cutoff: [{"job_id": "j1", "content_hash": "sha1"}])
+    monkeypatch.setattr(
+        cleanup.db,
+        "list_expirable",
+        lambda cutoff: [
+            {
+                "job_id": "j1",
+                "content_hash": "sha1",
+                "owner_session_hash": "owner-a",
+            }
+        ],
+    )
     marked, emitted = [], []
     monkeypatch.setattr(cleanup.db, "mark_expired", lambda jid, ts: marked.append(jid) or True)
     monkeypatch.setattr(cleanup, "emit", lambda et, jid, p: emitted.append((et, jid)))
@@ -94,7 +105,7 @@ def test_expire_deletes_dir_dedupe_key_marks_and_emits(monkeypatch, tmp_path):
 
     assert expired == 1 and failed == 0
     assert not (tmp_path / "output" / "j1").exists()      # output dir removed
-    assert set(fake.deleted) == {"content:sha1", "job:j1"}  # dedupe key + stale hot hash removed
+    assert set(fake.deleted) == {"content:owner-a:sha1", "job:j1"}
     assert marked == ["j1"] and emitted == [("job.expired", "j1")]
 
 

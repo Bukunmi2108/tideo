@@ -38,6 +38,7 @@ def _done_rec(**kw):
 def test_job_row_maps_source_metadata_columns():
     row = job_row("j1", _done_rec(), finished_at="2026-06-17T10:01:00+00:00")
     assert row["job_id"] == "j1"
+    assert row["owner_session_hash"] is None
     assert row["status"] == "done"
     assert row["content_hash"] == "sha-abc"
     assert row["source_filename"] == "clip.mov"
@@ -144,6 +145,43 @@ def test_write_terminal_inserts_job_then_each_rendition_and_commits():
 def test_jobs_upsert_only_patches_subtitles_for_same_terminal_status():
     assert "jobs.status = EXCLUDED.status" in JOBS_UPSERT
     assert "subtitles = COALESCE" in JOBS_UPSERT
+
+
+def test_list_jobs_filters_by_owner_at_the_database_boundary(monkeypatch):
+    calls = []
+
+    class ReadCursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def execute(self, sql, params):
+            calls.append((sql, params))
+
+        def fetchall(self):
+            return []
+
+    class ReadConn:
+        def cursor(self, cursor_factory=None):
+            return ReadCursor()
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(db.psycopg2, "connect", lambda _dsn: ReadConn())
+
+    db.list_jobs(
+        owner_session_hash="owner-a",
+        status="done",
+        limit=5,
+        offset=2,
+    )
+
+    sql, params = calls[0]
+    assert "owner_session_hash = %s" in sql
+    assert params == ("owner-a", "done", 6, 2)
 
 
 # ---------- persist_terminal: failures surface to the outbox, missing schema self-heals ----------

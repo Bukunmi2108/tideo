@@ -16,6 +16,7 @@ class MockWS {
   onclose: ((e: { code: number }) => void) | null = null;
   onerror: ((e: unknown) => void) | null = null;
   readyState = 0;
+  sent: string[] = [];
 
   constructor(url: string) {
     this.url = url;
@@ -25,6 +26,10 @@ class MockWS {
   close() {
     this.readyState = 3;
     this.onclose?.({ code: 1000 });
+  }
+
+  send(data: string) {
+    this.sent.push(data);
   }
 
   // Helpers used in tests
@@ -55,6 +60,25 @@ afterEach(() => {
 // ---- Tests ----------------------------------------------------------------
 
 describe("watch() — WebSocket path", () => {
+  it("authenticates in the first frame without putting the token in the URL", () => {
+    const teardown = watch("j1", {
+      onSnapshot: () => {},
+      onProgress: () => {},
+      onState: () => {},
+      onMode: () => {},
+    });
+
+    const ws = MockWS.last!;
+    ws.open();
+
+    expect(ws.url).not.toContain("session=");
+    expect(JSON.parse(ws.sent[0])).toMatchObject({
+      type: "auth",
+      session: expect.any(String),
+    });
+    teardown();
+  });
+
   it("emits snapshot frame on connect", () => {
     const snapshots: SnapshotFrame[] = [];
     const teardown = watch("j1", {
@@ -172,6 +196,32 @@ describe("watch() — WebSocket path", () => {
 });
 
 describe("watch() — fallback to polling", () => {
+  it("sends the guest owner header when polling", async () => {
+    let capturedInit: RequestInit | undefined;
+    vi.stubGlobal("fetch", async (_url: string, init?: RequestInit) => {
+      capturedInit = init;
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ job_id: "j1", status: "done" }),
+      };
+    });
+    const teardown = watch("j1", {
+      onSnapshot: () => {},
+      onProgress: () => {},
+      onState: () => {},
+      onMode: () => {},
+    });
+
+    MockWS.last!.die();
+    await vi.runAllTimersAsync();
+
+    expect(new Headers(capturedInit?.headers).get("X-Tideo-Session")).toMatch(
+      /^v1\.[A-Za-z0-9_-]{43}$/,
+    );
+    teardown();
+  });
+
   it("switches to polling mode when WS dies", () => {
     const modes: string[] = [];
     const teardown = watch("j1", {

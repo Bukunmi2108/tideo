@@ -1,7 +1,7 @@
 import shutil
 from pathlib import Path
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 from fastapi.concurrency import run_in_threadpool
 from kombu.exceptions import OperationalError
 
@@ -13,6 +13,7 @@ from app.api.errors import (
     UnsupportedMedia,
     UploadTooLarge,
 )
+from app.api.session import require_session
 from app.api.utils import new_job_id, now_iso
 from app.core.config import config
 from app.core.logging import bind_job, get_logger
@@ -26,7 +27,7 @@ from app.workers.celery_app import app as celery_app
 
 router = APIRouter(
     tags=["Upload"],
-    responses={code: {"model": ErrorResponse} for code in (413, 415, 422, 503)},
+    responses={code: {"model": ErrorResponse} for code in (401, 413, 415, 422, 503)},
 )
 log = get_logger()
 
@@ -47,7 +48,11 @@ async def _cleanup(path: Path) -> None:
 
 
 @router.post("/upload", status_code=202)
-async def upload(request: Request, filename: str | None = None):
+async def upload(
+    request: Request,
+    filename: str | None = None,
+    owner_session_hash: str = Depends(require_session),
+):
     if not filename:
         raise InvalidUpload("filename query parameter is required")
     ext = Path(filename).suffix.lower()
@@ -82,9 +87,11 @@ async def upload(request: Request, filename: str | None = None):
         "content_hash": content_hash,
         "source_path": str(dest),
         "created_at": now_iso(),
+        "owner_session_hash": owner_session_hash,
     }
     resolution = await dedupe.resolve_upload(
         r,
+        owner_session_hash,
         content_hash,
         job_id,
         job_fields,
@@ -92,10 +99,24 @@ async def upload(request: Request, filename: str | None = None):
     if resolution.status == "done":
         manifest = paths.output_dir(resolution.job_id) / "manifest.json"
         if await run_in_threadpool(manifest.is_file):
-            await r.expire(f"content:{content_hash}", config.output_ttl_days * 86400)
+            await r.expire(
+                dedupe.content_key(owner_session_hash, content_hash),
+                config.output_ttl_days * 86400,
+            )
         else:
-            await dedupe.invalidate_done(r, content_hash, resolution.job_id)
-            resolution = await dedupe.resolve_upload(r, content_hash, job_id, job_fields)
+            await dedupe.invalidate_done(
+                r,
+                owner_session_hash,
+                content_hash,
+                resolution.job_id,
+            )
+            resolution = await dedupe.resolve_upload(
+                r,
+                owner_session_hash,
+                content_hash,
+                job_id,
+                job_fields,
+            )
     if resolution.outcome == "hit":
         await _cleanup(dest.parent)
         log.info("upload_completed", dedupe="hit", owner=resolution.job_id)

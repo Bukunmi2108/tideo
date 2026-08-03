@@ -1,5 +1,5 @@
 import "./style.css";
-import { startRouter } from "./router";
+import { applyRouteChrome, routeMeta, startRouter } from "./router";
 import { mount as mountLanding } from "./landing";
 import { mount as mountUpload } from "./upload";
 import { mount as mountJob } from "./job";
@@ -20,18 +20,19 @@ const routes: [RegExp, Mounter][] = [
 const app = document.getElementById("app")!;
 let teardown: (() => void) | null = null;
 
-function render(): void {
+function render(isNavigation: boolean): void {
   teardown?.();
   teardown = null;
   app.replaceChildren();
   const match = routes.find(([re]) => re.test(location.pathname));
   const query = new URLSearchParams(location.search);
   teardown = match ? match[1](app, query) : mountNotFound(app);
+  applyRouteChrome(app, routeMeta(location.pathname), isNavigation);
 }
 
 function mountNotFound(root: HTMLElement): () => void {
   root.innerHTML = `
-    <main class="job-main">
+    <main id="main-content" class="job-main">
       <div class="inspect-card inspect-card--terminal">
         <h1 class="inspect-title">Page not found</h1>
         <a href="/" class="btn btn-primary">Back home</a>

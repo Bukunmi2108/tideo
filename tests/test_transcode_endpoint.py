@@ -5,6 +5,12 @@ from fastapi.testclient import TestClient
 
 from app.api.main import app
 from app.api.routes import job as job_route
+from app.api.session import hash_session_token
+
+SESSION_TOKEN = "v1." + "A" * 43
+OTHER_TOKEN = "v1." + "B" * 43
+SESSION_HASH = hash_session_token(SESSION_TOKEN)
+SESSION_HEADERS = {"X-Tideo-Session": SESSION_TOKEN}
 
 
 class FakeRedis:
@@ -44,7 +50,11 @@ def client(monkeypatch):
         return "queued"
 
     monkeypatch.setattr(job_route, "aqueue_job", queue_job)
-    return TestClient(app, raise_server_exceptions=False), fake, spy
+    return TestClient(
+        app,
+        raise_server_exceptions=False,
+        headers=SESSION_HEADERS,
+    ), fake, spy
 
 
 def test_transcode_sheds_under_storage_pressure(client, monkeypatch):
@@ -64,6 +74,7 @@ def seed_awaiting(fake, job_id, presets):
         "status": "awaiting_choice",
         "recommended_presets": json.dumps(presets),
         "source_meta": json.dumps({"duration": 30.0, "height": 1080}),
+        "owner_session_hash": SESSION_HASH,
     }
 
 
@@ -74,9 +85,26 @@ def test_unknown_job_is_404(client):
     assert spy == []
 
 
+def test_foreign_session_cannot_start_transcoding(client):
+    c, fake, spy = client
+    seed_awaiting(fake, "foreign", ["480p"])
+
+    response = c.post(
+        "/jobs/foreign/transcode",
+        json={"presets": ["480p"]},
+        headers={"X-Tideo-Session": OTHER_TOKEN},
+    )
+
+    assert response.status_code == 404
+    assert spy == []
+
+
 def test_wrong_state_is_409(client):
     c, fake, spy = client
-    fake.hashes["job:j1"] = {"status": "inspecting"}
+    fake.hashes["job:j1"] = {
+        "status": "inspecting",
+        "owner_session_hash": SESSION_HASH,
+    }
     r = c.post("/jobs/j1/transcode", json={"presets": ["480p"]})
     assert r.status_code == 409
     assert r.json()["error"]["code"] == "WRONG_STATE"

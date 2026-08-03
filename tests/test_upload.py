@@ -7,8 +7,13 @@ from kombu.exceptions import OperationalError
 
 from app.api.main import app
 from app.api.routes import upload as up
+from app.api.session import hash_session_token
 from app.core.config import config
 from app.storage import dedupe
+
+SESSION_TOKEN = "v1." + "A" * 43
+SESSION_HASH = hash_session_token(SESSION_TOKEN)
+SESSION_HEADERS = {"X-Tideo-Session": SESSION_TOKEN}
 
 
 @pytest.fixture
@@ -19,7 +24,8 @@ def client(monkeypatch, tmp_path):
     monkeypatch.setattr(up.celery_app, "send_task", MagicMock())
     monkeypatch.setattr(up, "under_pressure", lambda: False)
 
-    async def resolve(r, sha, job_id, extra):
+    async def resolve(r, owner_session_hash, sha, job_id, extra):
+        assert owner_session_hash == SESSION_HASH
         await r.hset(f"job:{job_id}", mapping={"status": "inspecting", **extra})
         return dedupe.UploadResolution("miss", job_id, "inspecting")
 
@@ -29,7 +35,27 @@ def client(monkeypatch, tmp_path):
     monkeypatch.setattr(up.dedupe, "resolve_upload", resolve, raising=False)
     monkeypatch.setattr(up, "atransition_status", transition, raising=False)
     monkeypatch.setattr(up.terminal_outbox, "adrain_one", AsyncMock(return_value=True))
-    return TestClient(app, raise_server_exceptions=False), fake_redis, tmp_path
+    return TestClient(
+        app,
+        raise_server_exceptions=False,
+        headers=SESSION_HEADERS,
+    ), fake_redis, tmp_path
+
+
+def test_upload_requires_a_valid_guest_session():
+    c = TestClient(app, raise_server_exceptions=False)
+
+    missing = c.post("/upload?filename=clip.mp4", content=b"hello")
+    invalid = c.post(
+        "/upload?filename=clip.mp4",
+        content=b"hello",
+        headers={"X-Tideo-Session": "invalid"},
+    )
+
+    assert missing.status_code == 401
+    assert missing.json()["error"]["code"] == "SESSION_REQUIRED"
+    assert invalid.status_code == 401
+    assert invalid.json()["error"]["code"] == "INVALID_SESSION"
 
 
 def test_upload_sheds_under_storage_pressure(client, monkeypatch):
@@ -50,6 +76,7 @@ def test_valid_upload_returns_202_and_hashes(client):
     j = r.json()
     assert j["status"] == "inspecting" and j["dedupe"] == "miss"
     assert fake_redis.hset.call_args.kwargs["mapping"]["content_hash"] == hashlib.sha256(body).hexdigest()
+    assert fake_redis.hset.call_args.kwargs["mapping"]["owner_session_hash"] == SESSION_HASH
     assert (tmp_path / "uploads" / j["job_id"] / "source.mp4").read_bytes() == body
 
 

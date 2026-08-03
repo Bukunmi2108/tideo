@@ -8,9 +8,14 @@ from fastapi.testclient import TestClient
 
 from app.api.main import app
 from app.api.routes import upload as up
+from app.api.session import hash_session_token
 from app.core.config import config
 from app.storage import dedupe
 from app.storage.state import ACTIVE_DEADLINES
+
+SESSION_TOKEN = "v1." + "A" * 43
+SESSION_HASH = hash_session_token(SESSION_TOKEN)
+SESSION_HEADERS = {"X-Tideo-Session": SESSION_TOKEN}
 
 
 class FakeRedis:
@@ -21,8 +26,19 @@ class FakeRedis:
         self.expiries = []
 
     async def eval(self, _script, key_count, *args):
-        if key_count == 4:
-            content_key, job_key, stats_key, deadlines_key, job_id, _ttl, deadline, *extra = args
+        if key_count == 5:
+            (
+                content_key,
+                job_key,
+                stats_key,
+                deadlines_key,
+                session_key,
+                job_id,
+                _ttl,
+                deadline,
+                created,
+                *extra,
+            ) = args
             owner = self.kv.get(content_key)
             status = self.hashes.get(f"job:{owner}", {}).get("status") if owner else None
             if status in {"inspecting", "awaiting_choice", "queued", "transcoding", "done"}:
@@ -35,6 +51,7 @@ class FakeRedis:
             counts = self.hashes.setdefault(stats_key, {})
             counts["inspecting"] = int(counts.get("inspecting", 0)) + 1
             self.zsets.setdefault(deadlines_key, {})[job_id] = float(deadline)
+            self.zsets.setdefault(session_key, {})[job_id] = float(created)
             return ["miss", job_id, "inspecting"]
         if key_count == 2:
             content_key, job_key, owner = args
@@ -54,9 +71,10 @@ class FakeRedis:
         self.expiries.append((key, ttl))
         return True
 
-def _resolve(r, sha="sha", job_id="new"):
+def _resolve(r, sha="sha", job_id="new", owner_session_hash=SESSION_HASH):
     return dedupe.resolve_upload(
         r,
+        owner_session_hash,
         sha,
         job_id,
         {
@@ -68,10 +86,20 @@ def _resolve(r, sha="sha", job_id="new"):
     )
 
 
+def test_same_content_is_deduplicated_only_within_one_guest_session():
+    r = FakeRedis()
+
+    first = asyncio.run(_resolve(r, job_id="first", owner_session_hash="owner-a"))
+    second = asyncio.run(_resolve(r, job_id="second", owner_session_hash="owner-b"))
+
+    assert first.outcome == second.outcome == "miss"
+    assert first.job_id != second.job_id
+
+
 @pytest.mark.parametrize("status", ["inspecting", "awaiting_choice", "queued", "transcoding", "done"])
 def test_resolve_reuses_live_owner(status):
     r = FakeRedis()
-    r.kv["content:sha"] = "old"
+    r.kv[dedupe.content_key(SESSION_HASH, "sha")] = "old"
     r.hashes["job:old"] = {"status": status}
 
     result = asyncio.run(_resolve(r))
@@ -84,14 +112,14 @@ def test_resolve_reuses_live_owner(status):
 @pytest.mark.parametrize("status", [None, "failed", "cancelled", "expired", "unknown"])
 def test_resolve_replaces_terminal_or_missing_owner(status):
     r = FakeRedis()
-    r.kv["content:sha"] = "old"
+    r.kv[dedupe.content_key(SESSION_HASH, "sha")] = "old"
     if status:
         r.hashes["job:old"] = {"status": status}
 
     result = asyncio.run(_resolve(r))
 
     assert result == dedupe.UploadResolution("miss", "new", "inspecting")
-    assert r.kv["content:sha"] == "new"
+    assert r.kv[dedupe.content_key(SESSION_HASH, "sha")] == "new"
     assert r.hashes["job:new"]["content_hash"] == "sha"
     assert r.hashes["stats:active"]["inspecting"] == 1
 
@@ -109,7 +137,8 @@ def test_parallel_resolution_has_one_winner():
         r = aioredis.Redis(host="127.0.0.1", port=6379, db=15, decode_responses=True)
         sha = f"it_upload_{uuid4().hex}"
         first, second = f"j_{uuid4().hex}", f"j_{uuid4().hex}"
-        content_key = f"content:{sha}"
+        content_key = dedupe.content_key(SESSION_HASH, sha)
+        session_key = f"session:{SESSION_HASH}:jobs"
         before = int(await r.hget("stats:active", "inspecting") or 0)
         try:
             results = await asyncio.gather(
@@ -120,7 +149,7 @@ def test_parallel_resolution_has_one_winner():
             after = int(await r.hget("stats:active", "inspecting") or 0)
             return results, owner, after - before
         finally:
-            await r.delete(content_key, f"job:{first}", f"job:{second}")
+            await r.delete(content_key, f"job:{first}", f"job:{second}", session_key)
             await r.zrem(ACTIVE_DEADLINES, first, second)
             await r.hset("stats:active", "inspecting", before)
             await r.aclose()
@@ -147,9 +176,10 @@ def test_new_upload_registers_an_active_deadline(monkeypatch):
     asyncio.run(_resolve(r))
 
     key_count, args = r.call
-    assert key_count == 4
+    assert key_count == 5
     assert args[3] == ACTIVE_DEADLINES
-    assert float(args[6]) == 1000 + config.output_ttl_days * 86400
+    assert args[4] == f"session:{SESSION_HASH}:jobs"
+    assert float(args[7]) == 1000 + config.output_ttl_days * 86400
 
 
 @pytest.fixture
@@ -164,7 +194,11 @@ def client(monkeypatch, tmp_path):
         "send_task",
         lambda name, args=None: sent.append((name, args)),
     )
-    return TestClient(app, raise_server_exceptions=False), fake, sent
+    return TestClient(
+        app,
+        raise_server_exceptions=False,
+        headers=SESSION_HEADERS,
+    ), fake, sent
 
 
 def test_duplicate_upload_hits_owner_without_counter_drift(client):
@@ -223,5 +257,6 @@ def test_done_owner_with_manifest_is_reused_and_refreshes_ttl(client, tmp_path):
     second = http.post("/upload?filename=b.mp4", content=body).json()
 
     assert second == {"job_id": first["job_id"], "status": "done", "dedupe": "hit"}
-    assert fake.expiries == [(f"content:{next(iter(fake.kv)).split(':', 1)[1]}", config.output_ttl_days * 86400)]
+    content_key = next(key for key in fake.kv if key.startswith(f"content:{SESSION_HASH}:"))
+    assert fake.expiries == [(content_key, config.output_ttl_days * 86400)]
     assert len(sent) == 1

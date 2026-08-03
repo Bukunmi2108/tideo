@@ -78,6 +78,28 @@ def test_count_by_status_groups_terminal_rows(conn):
     assert counts.get("done", 0) >= 2 and counts.get("failed", 0) >= 1
 
 
+def test_list_jobs_isolated_by_guest_owner(conn):
+    from app.storage.db import list_jobs
+
+    owner_a = {**_rec("done"), "owner_session_hash": "owner-a"}
+    owner_b = {**_rec("done"), "owner_session_hash": "owner-b"}
+    write_terminal(
+        conn,
+        job_row("it_owner_a", owner_a, finished_at="2026-06-17T10:01:00+00:00"),
+        [],
+    )
+    write_terminal(
+        conn,
+        job_row("it_owner_b", owner_b, finished_at="2026-06-17T10:01:00+00:00"),
+        [],
+    )
+
+    rows = list_jobs(owner_session_hash="owner-a")
+
+    assert "it_owner_a" in [row["job_id"] for row in rows]
+    assert "it_owner_b" not in [row["job_id"] for row in rows]
+
+
 def test_list_expirable_and_mark_expired_round_trip(conn):
     from app.storage.db import list_expirable, mark_expired
 

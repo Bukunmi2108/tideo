@@ -16,6 +16,7 @@ _TRANSIENT = (psycopg2.OperationalError, psycopg2.InterfaceError)
 DDL = """
 CREATE TABLE IF NOT EXISTS jobs (
     job_id           TEXT PRIMARY KEY,
+    owner_session_hash TEXT,
     content_hash     TEXT NOT NULL,
     source_filename  TEXT NOT NULL,
     source_container TEXT, source_video_codec TEXT, source_audio_codec TEXT,
@@ -29,8 +30,12 @@ CREATE TABLE IF NOT EXISTS jobs (
     subtitles        JSONB
 );
 ALTER TABLE jobs ADD COLUMN IF NOT EXISTS subtitles JSONB;
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS owner_session_hash TEXT;
 CREATE INDEX IF NOT EXISTS jobs_status_created ON jobs (status, created_at DESC);
 CREATE INDEX IF NOT EXISTS jobs_content_hash   ON jobs (content_hash);
+CREATE INDEX IF NOT EXISTS jobs_owner_created ON jobs (owner_session_hash, created_at DESC);
+CREATE INDEX IF NOT EXISTS jobs_owner_status_created
+    ON jobs (owner_session_hash, status, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS renditions (
     id             BIGSERIAL PRIMARY KEY,
@@ -47,13 +52,13 @@ CREATE TABLE IF NOT EXISTS renditions (
 # Transcription can finish after the job row; only that same-terminal patch may change a redelivery.
 JOBS_UPSERT = """
 INSERT INTO jobs (
-    job_id, content_hash, source_filename,
+    job_id, owner_session_hash, content_hash, source_filename,
     source_container, source_video_codec, source_audio_codec,
     source_width, source_height, source_duration_s, source_bitrate,
     presets, status, error_code, error_message, error_stage,
     created_at, started_at, finished_at, expired_at, subtitles
 ) VALUES (
-    %(job_id)s, %(content_hash)s, %(source_filename)s,
+    %(job_id)s, %(owner_session_hash)s, %(content_hash)s, %(source_filename)s,
     %(source_container)s, %(source_video_codec)s, %(source_audio_codec)s,
     %(source_width)s, %(source_height)s, %(source_duration_s)s, %(source_bitrate)s,
     %(presets)s, %(status)s, %(error_code)s, %(error_message)s, %(error_stage)s,
@@ -85,6 +90,7 @@ def job_row(job_id: str, rec: dict, *, finished_at: str) -> dict:
     sm = sm if isinstance(sm, dict) else {}
     return {
         "job_id": job_id,
+        "owner_session_hash": rec.get("owner_session_hash") or None,
         "content_hash": rec.get("content_hash"),
         "source_filename": rec.get("source_filename"),
         "source_container": sm.get("container"),
@@ -165,18 +171,30 @@ def get_job(job_id: str) -> dict | None:
         conn.close()
 
 
-def list_jobs(*, status: str | None = None, limit: int = 20, offset: int = 0) -> list:
+def list_jobs(
+    *,
+    owner_session_hash: str,
+    status: str | None = None,
+    limit: int = 20,
+    offset: int = 0,
+) -> list:
     """Cold history, newest-first. Fetches limit+1 so the caller computes has_more without a COUNT."""
     conn = psycopg2.connect(config.postgres_dsn)
     try:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             # job_id tiebreaker: created_at isn't unique, so paging could otherwise skip/dupe rows
             if status:
-                cur.execute("SELECT * FROM jobs WHERE status = %s ORDER BY created_at DESC, job_id DESC "
-                            "LIMIT %s OFFSET %s", (status, limit + 1, offset))
+                cur.execute(
+                    "SELECT * FROM jobs WHERE owner_session_hash = %s AND status = %s "
+                    "ORDER BY created_at DESC, job_id DESC LIMIT %s OFFSET %s",
+                    (owner_session_hash, status, limit + 1, offset),
+                )
             else:
-                cur.execute("SELECT * FROM jobs ORDER BY created_at DESC, job_id DESC LIMIT %s OFFSET %s",
-                            (limit + 1, offset))
+                cur.execute(
+                    "SELECT * FROM jobs WHERE owner_session_hash = %s "
+                    "ORDER BY created_at DESC, job_id DESC LIMIT %s OFFSET %s",
+                    (owner_session_hash, limit + 1, offset),
+                )
             return cur.fetchall()
     finally:
         conn.close()
@@ -198,8 +216,11 @@ def list_expirable(cutoff) -> list:
     conn = psycopg2.connect(config.postgres_dsn)
     try:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute("SELECT job_id, content_hash FROM jobs WHERE status = 'done' AND finished_at < %s",
-                        (cutoff,))
+            cur.execute(
+                "SELECT job_id, content_hash, owner_session_hash FROM jobs "
+                "WHERE status = 'done' AND finished_at < %s",
+                (cutoff,),
+            )
             return cur.fetchall()
     finally:
         conn.close()

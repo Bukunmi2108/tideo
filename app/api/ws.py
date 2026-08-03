@@ -1,9 +1,11 @@
+import asyncio
 import json
 from typing import cast
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from app.api.model import error_view, json_list, progress_map, results_view
+from app.api.session import hash_session_token, owns_job
 from app.core.config import config
 from app.core.logging import bind_job, get_logger
 from app.domain.state import TERMINAL
@@ -13,6 +15,7 @@ router = APIRouter()
 log = get_logger()
 
 PING_INTERVAL = 25
+AUTH_TIMEOUT = 5
 
 
 async def _send_terminal(ws: WebSocket, r, job_id: str, status: str) -> None:
@@ -37,13 +40,30 @@ async def progress_ws(ws: WebSocket, job_id: str) -> None:
         return
     await ws.accept()
     r = get_client()
-    ps = r.pubsub()
+    ps = None
     try:
+        try:
+            auth = await asyncio.wait_for(ws.receive_json(), timeout=AUTH_TIMEOUT)
+            if not isinstance(auth, dict) or auth.get("type") != "auth":
+                raise ValueError("invalid auth frame")
+            token = auth.get("session")
+            if not isinstance(token, str):
+                raise TypeError("invalid auth frame")
+            owner_session_hash = hash_session_token(token)
+        except (TimeoutError, ValueError, TypeError):
+            await ws.close(code=1008)
+            return
+
+        rec = cast(dict, await r.hgetall(f"job:{job_id}"))
+        if not owns_job(rec, owner_session_hash):
+            await ws.close(code=1008)
+            return
+
+        ps = r.pubsub()
         # Queue transitions before reading the snapshot; the snapshot is still sent first.
         await ps.subscribe(f"progress:{job_id}")
         rec = cast(dict, await r.hgetall(f"job:{job_id}"))
-        if not rec:
-            await ws.send_json({"type": "error", "code": "NOT_FOUND"})
+        if not owns_job(rec, owner_session_hash):
             await ws.close(code=1008)
             return
 
@@ -80,4 +100,5 @@ async def progress_ws(ws: WebSocket, job_id: str) -> None:
     except Exception:
         log.exception("ws_error")
     finally:
-        await ps.aclose()
+        if ps is not None:
+            await ps.aclose()
