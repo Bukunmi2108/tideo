@@ -18,9 +18,11 @@ vi.mock("./sprite", () => ({
 
 import { getJob, getManifest } from "./api";
 import { mount } from "./job";
+import { watch, type WatchHandlers } from "./live";
 
 const getJobMock = getJob as unknown as ReturnType<typeof vi.fn>;
 const getManifestMock = getManifest as unknown as ReturnType<typeof vi.fn>;
+const watchMock = vi.mocked(watch);
 
 const DONE_JOB: JobResponse = {
   job_id: "j1",
@@ -54,6 +56,7 @@ beforeEach(() => {
   document.body.appendChild(root);
   getJobMock.mockResolvedValue(DONE_JOB);
   getManifestMock.mockResolvedValue(MANIFEST);
+  watchMock.mockImplementation(() => () => {});
 });
 
 afterEach(() => {
@@ -64,6 +67,42 @@ afterEach(() => {
     value: undefined,
   });
   vi.clearAllMocks();
+});
+
+describe("transcoding progress", () => {
+  it("renders the initial progress and visually advances on live updates", async () => {
+    getJobMock.mockResolvedValue({
+      job_id: "j1",
+      status: "transcoding",
+      source_filename: "clip.mp4",
+      presets: ["720p"],
+      progress: { "720p": 42 },
+    } satisfies JobResponse);
+    let handlers: WatchHandlers | undefined;
+    watchMock.mockImplementation((_jobId, nextHandlers) => {
+      handlers = nextHandlers;
+      return () => {};
+    });
+
+    teardown = mount(root, new URLSearchParams("id=j1"));
+    await vi.waitFor(() =>
+      expect(root.querySelector(".progress-bar-fill")).toBeTruthy(),
+    );
+
+    const fill = root.querySelector<HTMLElement>(".progress-bar-fill")!;
+    const label = root.querySelector<HTMLElement>(".bar-pct")!;
+    expect(label.textContent).toBe("42%");
+    expect(fill.style.transform).toBe("scaleX(0.42)");
+
+    handlers!.onProgress({
+      type: "progress",
+      preset: "720p",
+      percent: 68,
+    });
+
+    expect(label.textContent).toBe("68%");
+    expect(fill.style.transform).toBe("scaleX(0.68)");
+  });
 });
 
 describe("completed-job sharing", () => {
