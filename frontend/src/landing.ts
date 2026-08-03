@@ -1,119 +1,125 @@
-import { listJobs, type JobSummary } from "./api";
-import { siteHeader, siteFooter } from "./render";
-import {
-  applySprite,
-  loadStoryboard,
-  playLoop,
-  spriteUrl,
-  type Loop,
-} from "./sprite";
+import { siteFooter, siteHeader } from "./render";
 
-// The entry screen: what Tideo is, what to expect, and a living filmstrip built from a real job's
-// sprite sheet — the product previewing itself.
-
-const STEPS: [string, string, string][] = [
-  [
-    "Upload",
-    "Drop a video",
-    "Streamed straight to disk, hashed, and deduped. Re-uploading the same file is instant.",
-  ],
-  [
-    "Inspect",
-    "We read it",
-    "ffprobe pulls codec, resolution, and duration, then recommends a quality ladder that fits.",
-  ],
-  [
-    "Choose",
-    "Pick your rungs",
-    "Select resolutions from 1080p down to 360p, and turn on captions.",
-  ],
-  [
-    "Encode",
-    "Fan out",
-    "Every rendition encodes in parallel across workers, then fans back in to one package.",
-  ],
-  [
-    "Stream",
-    "Play anywhere",
-    "Adaptive HLS that switches quality on the fly, plus a poster, scrub sprite, and an MP4.",
-  ],
+const STEPS: [string, string][] = [
+  ["Upload", "Choose one source video up to 4 GB."],
+  ["Inspect", "Review the codec, resolution, duration, and suggested ladder."],
+  ["Choose outputs", "Select playback sizes and optional captions before work begins."],
+  ["Encode", "Tideo processes each selected rendition in parallel."],
+  ["Stream", "Use adaptive HLS, download the MP4, or copy an embed."],
 ];
+
+function outputProof(): string {
+  return `<figure class="lp-proof" id="demo-output">
+    <div class="lp-proof-frame">
+      <img
+        class="lp-proof-poster"
+        src="/demo/tideo-test-pattern-poster.webp"
+        width="1280"
+        height="720"
+        alt="A synthetic test pattern used to demonstrate a privacy-safe Tideo video output"
+        fetchpriority="high"
+      />
+      <div class="lp-proof-frame-meta" aria-hidden="true">
+        <span>Demo output</span>
+        <span>00:12</span>
+      </div>
+    </div>
+    <figcaption class="lp-proof-details">
+      <div class="lp-proof-heading">
+        <div>
+          <p class="lp-proof-kicker">Synthetic fixture, no user media</p>
+          <h2>One source, three playback sizes</h2>
+        </div>
+        <span class="status-badge status-badge--success">Ready</span>
+      </div>
+      <dl class="lp-proof-specs">
+        <div><dt>Source</dt><dd>1280 × 720</dd></div>
+        <div><dt>Measured bitrate</dt><dd>7.5 Mbps</dd></div>
+        <div><dt>Codecs</dt><dd>H.264 / AAC</dd></div>
+      </dl>
+      <div class="lp-proof-outputs" aria-label="Generated output summary">
+        <span>720p</span><span>480p</span><span>360p</span><span>HLS</span><span>MP4</span>
+      </div>
+      <p class="lp-proof-caption">Captions: not requested for this synthetic demo.</p>
+      <img
+        class="lp-proof-storyboard"
+        src="/demo/tideo-test-pattern-storyboard.webp"
+        width="1280"
+        height="360"
+        alt="Eight frames from the generated test-pattern storyboard"
+        loading="lazy"
+      />
+    </figcaption>
+  </figure>`;
+}
 
 function hero(): string {
   return `<section class="lp-hero">
     <div class="lp-hero-copy">
-      <p class="lp-eyebrow">Distributed video transcoding</p>
-      <h1 class="lp-title">Upload once. Stream every screen.</h1>
-      <p class="lp-lede">Tideo turns one source file into an adaptive HLS ladder, with every resolution
-        encoded in parallel, ready to play at whatever bitrate the viewer's connection allows.</p>
-      <dl class="lp-ledger">
-        <div><dd>1080→360</dd><dt>ladder</dt></div>
-        <div><dd>H.264 · AAC</dd><dt>codecs</dt></div>
-        <div><dd>HLS + MP4</dd><dt>output</dt></div>
-        <div><dd>≤ 4 GB</dd><dt>per file</dt></div>
-      </dl>
+      <p class="lp-eyebrow">Adaptive video transcoding</p>
+      <h1 class="lp-title">One upload. Every playback size.</h1>
+      <p class="lp-lede">Create adaptive HLS, a web-ready MP4, captions, and embeds from one source video.</p>
       <div class="lp-actions">
-        <a href="/upload" class="btn btn-primary btn-lg">Upload a video</a>
-        <a href="/history" class="btn btn-ghost btn-lg">View my videos</a>
+        <a href="/upload" class="btn btn-primary btn-lg">Upload video</a>
+        <a href="#demo-output" class="btn btn-ghost btn-lg">Watch demo</a>
       </div>
+      <p class="lp-limit">MP4, MOV, MKV, WebM, AVI, or M4V. Up to 4 GB.</p>
     </div>
-    <div class="lp-hero-screen">
-      <div class="smpte" aria-hidden="true"></div>
-      <div class="film-screen" id="film" aria-hidden="true"></div>
-      <div class="film-scrub" aria-hidden="true"><span></span></div>
-    </div>
+    ${outputProof()}
   </section>`;
 }
 
-function howItWorks(): string {
+function trustNotice(): string {
+  return `<aside class="lp-trust" aria-labelledby="trust-title">
+    <div class="lp-trust-heading">
+      <p class="lp-trust-kicker">Before you upload</p>
+      <h2 id="trust-title">Temporary processing, clear boundaries</h2>
+    </div>
+    <ul>
+      <li><strong>Temporary</strong><span>Files and outputs expire automatically.</span></li>
+      <li><strong>This browser</strong><span>My videos is scoped to this browser session.</span></li>
+      <li><strong>Public when shared</strong><span>Anyone with a shared link can watch.</span></li>
+      <li><strong>Sensitive material</strong><span>Keep it off this public demonstration.</span></li>
+    </ul>
+    <a href="/privacy">Read privacy details</a>
+  </aside>`;
+}
+
+function workflow(): string {
   const steps = STEPS.map(
-    ([tag, head, body], i) => `
-    <li class="lp-step">
-      <span class="lp-step-n">${String(i + 1).padStart(2, "0")}</span>
-      <div class="lp-step-body">
-        <span class="lp-step-tag">${tag}</span>
-        <h3 class="lp-step-head">${head}</h3>
-        <p class="lp-step-text">${body}</p>
-      </div>
+    ([title, body]) => `<li class="lp-step">
+      <h3 class="lp-step-title">${title}</h3>
+      <p>${body}</p>
     </li>`,
   ).join("");
-  return `<section class="lp-how">
-    <h2 class="lp-section-title">From file to stream</h2>
+
+  return `<section class="lp-workflow" aria-labelledby="workflow-title">
+    <div class="lp-section-heading">
+      <p class="lp-section-kicker">The workflow</p>
+      <h2 id="workflow-title">You decide before Tideo starts expensive work.</h2>
+      <p>Inspect the source and choose the output plan before transcoding begins.</p>
+    </div>
     <ol class="lp-steps">${steps}</ol>
   </section>`;
 }
 
-export function mount(root: HTMLElement): () => void {
-  const ctrl = new AbortController();
-  let loop: Loop | null = null;
+function closingAction(): string {
+  return `<section class="lp-closer" aria-labelledby="closer-title">
+    <p class="lp-section-kicker">Ready when you are</p>
+    <h2 class="lp-closer-title" id="closer-title">Turn one source into a complete playback package.</h2>
+    <a href="/upload" class="btn btn-primary btn-lg">Upload video</a>
+  </section>`;
+}
 
+export function mount(root: HTMLElement): () => void {
   root.innerHTML = `${siteHeader()}
     <main id="main-content" class="lp-main">
       ${hero()}
-      ${howItWorks()}
+      ${trustNotice()}
+      ${workflow()}
+      ${closingAction()}
     </main>
     ${siteFooter()}`;
 
-  // hydrate the hero screen with a real job's sprite, auto-advancing like a preview
-  const film = root.querySelector<HTMLElement>("#film");
-  (async () => {
-    try {
-      const page = await listJobs({ limit: 12 }, ctrl.signal);
-      const feat: JobSummary | undefined = page.items.find(
-        (j) => j.status === "done" && !!j.poster,
-      );
-      if (!feat || !film) return;
-      const sb = await loadStoryboard(feat.job_id);
-      if (!sb || ctrl.signal.aborted) return;
-      applySprite(film, sb, spriteUrl(feat.job_id));
-      loop = playLoop(film, sb, 8);
-    } catch {
-      // no jobs yet or offline — the static screen + SMPTE bars carry the hero on their own
-    }
-  })();
-
-  return () => {
-    ctrl.abort();
-    loop?.stop();
-  };
+  return () => {};
 }

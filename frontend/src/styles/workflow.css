@@ -1,158 +1,305 @@
 /* ---- Upload page ---------------------------------------------------------- */
 
 .upload-main {
+  width: 100%;
+  padding: var(--sp-8) var(--sp-6);
+}
+
+.upload-shell {
+  width: min(100%, 1040px);
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: minmax(0, 0.72fr) minmax(480px, 1.28fr);
+  grid-template-rows: auto 1fr;
+  gap: var(--sp-6) var(--sp-8);
+  align-items: start;
+}
+
+.upload-intro {
   display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--sp-3);
+}
+
+.upload-eyebrow,
+.upload-state-label {
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.upload-intro h1 {
+  font-family: var(--font-display);
+  font-size: clamp(40px, 5vw, 60px);
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: -0.045em;
+}
+
+.upload-intro > p:last-child {
+  max-width: 42ch;
+  color: var(--text-dim);
+  font-size: 16px;
+  line-height: 1.55;
+  text-wrap: pretty;
+}
+
+.upload-trust {
+  align-self: end;
+  padding: var(--sp-4) 0 var(--sp-4) var(--sp-4);
+  border-left: 2px solid var(--accent);
+}
+
+.upload-trust strong {
+  display: block;
+  margin-bottom: var(--sp-2);
+  font-size: 14px;
+}
+
+.upload-trust p {
+  color: var(--text-dim);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.upload-trust a {
+  display: inline-flex;
+  min-height: 44px;
   align-items: center;
-  justify-content: center;
-  min-height: calc(100dvh - var(--header-h));
-  padding: var(--sp-7) var(--sp-5);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.upload-stage {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  width: 100%;
 }
 
 .upload-card {
   position: relative;
-  background: linear-gradient(180deg, var(--surface), var(--bg-2));
-  border: 1px solid var(--border);
-  border-radius: var(--r-xl);
-  padding: var(--sp-8) var(--sp-7);
   width: 100%;
-  max-width: 540px;
+  min-height: 480px;
+  padding: var(--sp-7);
   display: flex;
   flex-direction: column;
   align-items: center;
+  justify-content: center;
   gap: var(--sp-4);
+  overflow: hidden;
+  border: 1px solid var(--border-2);
+  border-radius: var(--r-xl);
+  background: linear-gradient(155deg, var(--surface), var(--bg-2));
   box-shadow: var(--shadow-lg);
-  transition:
-    border-color var(--transition),
-    box-shadow var(--transition);
 }
 
 .upload-zone {
-  border: 1.5px dashed var(--border-2);
+  border-style: dashed;
+  color: var(--text);
   cursor: pointer;
+  line-height: inherit;
+  text-align: center;
   user-select: none;
-  overflow: hidden;
+  transition:
+    border-color var(--transition),
+    background-color var(--transition),
+    transform var(--transition);
 }
+
 .upload-zone::before {
   content: "";
   position: absolute;
   inset: 0;
-  background: radial-gradient(
-    70% 60% at 50% 0%,
-    var(--accent-glow),
-    transparent 70%
-  );
-  opacity: 0;
-  transition: opacity var(--transition);
+  background: radial-gradient(70% 58% at 50% 0%, var(--accent-glow), transparent 72%);
+  opacity: 0.45;
   pointer-events: none;
+  transition: opacity var(--transition);
 }
+
 .upload-zone:hover,
 .upload-zone:focus-visible,
 body.drag-active .upload-zone {
   border-color: var(--accent);
-  box-shadow: var(--glow);
+  background: color-mix(in oklch, var(--surface) 92%, var(--accent));
 }
+
 .upload-zone:hover::before,
 .upload-zone:focus-visible::before,
 body.drag-active .upload-zone::before {
-  opacity: 1;
+  opacity: 0.9;
+}
+
+.upload-zone:active {
+  transform: translateY(1px);
 }
 
 .upload-icon {
-  width: 56px;
-  height: 56px;
-  color: var(--accent);
+  position: relative;
+  width: 64px;
+  height: 64px;
   display: flex;
   align-items: center;
   justify-content: center;
+  color: var(--accent);
 }
+
 .upload-icon .icon {
   width: 48px;
   height: 48px;
 }
+
 .upload-icon--success {
   color: var(--success);
 }
+
 .upload-icon--danger {
   color: var(--danger);
 }
 
-.upload-headline {
+.upload-icon--busy .icon {
+  animation: spin 1s linear infinite;
+}
+
+.upload-zone-title,
+.upload-state h2 {
+  position: relative;
   font-family: var(--font-display);
   font-size: 26px;
   font-weight: 600;
-  letter-spacing: -0.02em;
+  line-height: 1.15;
+  letter-spacing: -0.025em;
   text-align: center;
+  text-wrap: balance;
 }
 
-.upload-sub {
+.upload-zone-copy,
+.upload-state-copy {
+  position: relative;
+  max-width: 46ch;
   color: var(--text-dim);
   font-size: 16px;
+  line-height: 1.55;
   text-align: center;
+  text-wrap: pretty;
 }
 
-.link-text {
-  color: var(--accent);
-  font-weight: 500;
-  text-decoration: underline;
-  text-underline-offset: 3px;
-  cursor: pointer;
+.upload-hint,
+.upload-state-label {
+  position: relative;
 }
 
 .upload-hint {
+  max-width: 42ch;
+  color: var(--text-xdim);
   font-family: var(--font-mono);
   font-size: 12px;
-  color: var(--text-xdim);
+  line-height: 1.55;
   letter-spacing: 0.04em;
   text-align: center;
 }
 
+.upload-state--error {
+  border-color: color-mix(in oklch, var(--danger) 46%, var(--border));
+}
+
+.upload-state--error .upload-state-label {
+  color: var(--danger);
+}
+
 .upload-filename {
-  font-weight: 500;
-  font-size: 16px;
-  color: var(--text);
+  align-self: stretch;
   max-width: 100%;
   overflow: hidden;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
   text-overflow: ellipsis;
   white-space: nowrap;
-  text-align: center;
-  align-self: stretch;
+}
+
+.upload-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--sp-3);
+  margin-top: var(--sp-2);
 }
 
 /* ---- Progress bar --------------------------------------------------------- */
 
 .progress-bar-track {
   width: 100%;
-  height: 6px;
-  background: var(--surface-3);
-  border-radius: 3px;
+  height: 8px;
   overflow: hidden;
+  border-radius: var(--r-sm);
+  background: var(--surface-3);
 }
 
 .progress-bar-fill {
+  width: 100%;
   height: 100%;
+  border-radius: inherit;
   background: linear-gradient(90deg, var(--accent), var(--accent-2));
-  border-radius: 3px;
-  transition: width var(--transition);
-  min-width: 6px;
+  transform: scaleX(0);
+  transform-origin: left center;
+  transition: transform var(--transition);
 }
 
 .upload-stats {
+  color: var(--text-dim);
   font-family: var(--font-mono);
   font-size: 12px;
-  color: var(--text-dim);
   font-variant-numeric: tabular-nums;
   text-align: center;
 }
-
-/* ---- Spinner -------------------------------------------------------------- */
 
 @keyframes spin {
   to {
     transform: rotate(360deg);
   }
 }
-.spin {
-  animation: spin 1s linear infinite;
+
+@media (max-width: 860px) {
+  .upload-main {
+    padding-top: var(--sp-6);
+  }
+
+  .upload-shell {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto;
+    gap: var(--sp-5);
+  }
+
+  .upload-stage {
+    grid-column: 1;
+    grid-row: auto;
+  }
+
+}
+
+@media (max-width: 560px) {
+  .upload-main {
+    padding: var(--sp-6) var(--sp-4) var(--sp-7);
+  }
+
+  .upload-card {
+    min-height: 360px;
+    padding: var(--sp-5);
+  }
+
+  .upload-actions {
+    width: 100%;
+  }
+
+  .upload-actions .btn {
+    width: 100%;
+  }
 }
 
 /* ---- Job page ------------------------------------------------------------- */
