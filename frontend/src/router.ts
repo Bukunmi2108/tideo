@@ -63,7 +63,10 @@ export function applyRouteChrome(
   document.title = meta.title;
   document.querySelector('meta[name="description"]')?.setAttribute("content", meta.description);
   const main = root.querySelector("main");
-  if (main) main.id = "main-content";
+  if (main) {
+    main.id = "main-content";
+    main.tabIndex = -1;
+  }
   if (!isNavigation) return;
   const heading = root.querySelector<HTMLElement>("h1") ?? main;
   if (heading) {
@@ -107,6 +110,15 @@ function onClick(e: MouseEvent): void {
   const href = a?.getAttribute("href");
   if (!a || !href || a.target === "_blank" || a.hasAttribute("download"))
     return;
+  if (href.startsWith("#")) {
+    const target = document.querySelector<HTMLElement>(href);
+    if (!target) return;
+    e.preventDefault();
+    history.replaceState(null, "", `${location.pathname}${location.search}${href}`);
+    target.focus();
+    target.scrollIntoView();
+    return;
+  }
   if (!href.startsWith("/")) return; // external/absolute → browser handles it
   e.preventDefault();
   navigate(href);

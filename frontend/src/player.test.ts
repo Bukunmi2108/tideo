@@ -70,13 +70,20 @@ describe("player", () => {
     });
 
     const video = root.querySelector("video") as HTMLVideoElement;
+    const poster = root.querySelector(".player-poster") as HTMLImageElement;
     expect(video.autoplay).toBe(false);
     expect(video.getAttribute("poster")).toBe("/poster.jpg");
+    expect(poster.getAttribute("src")).toBe("/poster.jpg");
+    expect(poster.hidden).toBe(false);
     expect(root.classList.contains("player--controls-visible")).toBe(true);
     expect(root.querySelector(".pl-play svg")).not.toBeNull();
     expect(root.querySelector(".pl-full svg")).not.toBeNull();
     expect(root.textContent).not.toContain("▶");
     expect(root.textContent).not.toContain("⛶");
+
+    Object.defineProperty(video, "paused", { configurable: true, value: false });
+    video.dispatchEvent(new Event("play"));
+    expect(poster.hidden).toBe(true);
 
     handle.destroy();
   });

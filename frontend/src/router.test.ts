@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { applyRouteChrome, routeMeta } from "./router";
+import { applyRouteChrome, routeMeta, startRouter } from "./router";
 
 beforeEach(() => {
   document.head.innerHTML = '<meta name="description" content="old">';
@@ -30,6 +30,19 @@ describe("applyRouteChrome", () => {
       meta.description,
     );
     expect(root.querySelector("main")?.id).toBe("main-content");
+    expect(root.querySelector("main")?.tabIndex).toBe(-1);
+  });
+
+  it("moves focus to the skip-link target", () => {
+    const main = document.querySelector("main") as HTMLElement;
+    main.id = "main-content";
+    main.tabIndex = -1;
+    document.body.insertAdjacentHTML("afterbegin", '<a href="#main-content">Skip to content</a>');
+    startRouter(() => {});
+
+    document.querySelector<HTMLAnchorElement>('a[href="#main-content"]')?.click();
+
+    expect(document.activeElement).toBe(main);
   });
 
   it("moves focus and announces client-side navigation", () => {

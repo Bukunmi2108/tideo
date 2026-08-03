@@ -26,6 +26,8 @@ Thumbs.db
 frontend/node_modules/
 frontend/dist/
 frontend/tsconfig.tsbuildinfo
+frontend/playwright-report/
+frontend/test-results/
 .env
 
 fixtures/*

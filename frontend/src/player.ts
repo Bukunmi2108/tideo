@@ -30,6 +30,7 @@ export function mountPlayer(
 ): PlayerHandle {
   container.classList.add("player", "player--controls-visible");
   container.innerHTML = `
+    ${opts.poster ? `<img class="player-poster" src="${esc(opts.poster)}" alt="" aria-hidden="true" />` : ""}
     <video class="player-video" playsinline tabindex="0" ${opts.poster ? `poster="${esc(opts.poster)}"` : ""}></video>
     <button class="pl-center-play" type="button" aria-label="Play video">${icon("play")}</button>
     <div class="player-error" role="alert" hidden>
@@ -55,6 +56,7 @@ export function mountPlayer(
     </div>
   `;
 
+  const poster = container.querySelector<HTMLImageElement>(".player-poster");
   const video = container.querySelector<HTMLVideoElement>(".player-video")!;
   const centerPlay = container.querySelector<HTMLButtonElement>(".pl-center-play")!;
   const playBtn = container.querySelector<HTMLButtonElement>(".pl-play")!;
@@ -161,6 +163,7 @@ export function mountPlayer(
 
   function syncPlay(): void {
     const paused = video.paused;
+    if (!paused) poster?.setAttribute("hidden", "");
     playBtn.innerHTML = icon(paused ? "play" : "pause");
     playBtn.setAttribute("aria-label", paused ? "Play" : "Pause");
     centerPlay.hidden = !paused;

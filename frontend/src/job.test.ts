@@ -76,6 +76,15 @@ afterEach(() => {
 });
 
 describe("inspect and choose", () => {
+  it("shows a stable inspection skeleton while the first job request is pending", () => {
+    getJobMock.mockReturnValue(new Promise(() => {}));
+
+    teardown = mount(root, new URLSearchParams("id=j1"));
+
+    expect(root.querySelector('.inspect-card[aria-busy="true"]')).toBeTruthy();
+    expect(root.querySelector("h1")?.textContent).toBe("Inspecting video");
+  });
+
   it("presents friendly source details and visible decision guidance", async () => {
     getJobMock.mockResolvedValue({
       job_id: "j1",
