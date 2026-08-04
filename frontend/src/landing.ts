@@ -1,7 +1,18 @@
 import { siteFooter, siteHeader } from "./render";
+import { mountPlayer } from "./player";
+
+const DEMO_STORYBOARD = {
+  url: "/demo/sintel-cinematic-storyboard.webp",
+  tiles: 8,
+  cols: 4,
+  rows: 2,
+  tile_w: 320,
+  tile_h: 180,
+  interval: 52.208 / 8,
+};
 
 const STEPS: [string, string][] = [
-  ["Upload", "Choose one source video up to 4 GB."],
+  ["Upload", "Choose one source video up to 5 minutes and 4 GB."],
   ["Inspect", "Review the codec, resolution, duration, and suggested ladder."],
   ["Choose outputs", "Select playback sizes and optional captions before work begins."],
   ["Encode", "Tideo processes each selected rendition in parallel."],
@@ -11,44 +22,29 @@ const STEPS: [string, string][] = [
 function outputProof(): string {
   return `<figure class="lp-proof" id="demo-output">
     <div class="lp-proof-frame">
-      <img
-        class="lp-proof-poster"
-        src="/demo/tideo-test-pattern-poster.webp"
-        width="1280"
-        height="720"
-        alt="A synthetic test pattern used to demonstrate a privacy-safe Tideo video output"
-        fetchpriority="high"
-      />
-      <div class="lp-proof-frame-meta" aria-hidden="true">
-        <span>Demo output</span>
-        <span>00:12</span>
-      </div>
+      <div class="lp-demo-player" id="demo-player" aria-label="Sintel adaptive-stream demo player"></div>
     </div>
     <figcaption class="lp-proof-details">
       <div class="lp-proof-heading">
         <div>
-          <p class="lp-proof-kicker">Synthetic fixture, no user media</p>
-          <h2>One source, three playback sizes</h2>
+          <p class="lp-proof-kicker">Preprocessed adaptive demo</p>
+          <h2>Sintel trailer</h2>
         </div>
-        <span class="status-badge status-badge--success">Ready</span>
+        <p class="lp-proof-meta">52 sec · H.264 / AAC · Captions included</p>
       </div>
-      <dl class="lp-proof-specs">
-        <div><dt>Source</dt><dd>1280 × 720</dd></div>
-        <div><dt>Measured bitrate</dt><dd>7.5 Mbps</dd></div>
-        <div><dt>Codecs</dt><dd>H.264 / AAC</dd></div>
-      </dl>
-      <div class="lp-proof-outputs" aria-label="Generated output summary">
-        <span>720p</span><span>480p</span><span>360p</span><span>240p</span><span>HLS</span><span>MP4</span>
+      <div class="lp-proof-controls">
+        <span class="lp-proof-control-label">Try a quality</span>
+        <div class="lp-proof-outputs" aria-label="Choose demo playback quality">
+          <button type="button" data-demo-quality="480" aria-pressed="false">480p</button>
+          <button type="button" data-demo-quality="360" aria-pressed="false">360p</button>
+          <button type="button" data-demo-quality="240" aria-pressed="false">240p</button>
+        </div>
       </div>
-      <p class="lp-proof-caption">Captions: not requested for this synthetic demo.</p>
-      <img
-        class="lp-proof-storyboard"
-        src="/demo/tideo-test-pattern-storyboard.webp"
-        width="1280"
-        height="360"
-        alt="Eight frames from the generated test-pattern storyboard"
-        loading="lazy"
-      />
+      <p class="lp-proof-credit">
+        <a href="https://durian.blender.org/" target="_blank" rel="noreferrer">Sintel</a>
+        trailer © Blender Foundation ·
+        <a href="https://creativecommons.org/licenses/by/3.0/" target="_blank" rel="license noreferrer">CC BY 3.0</a>
+      </p>
     </figcaption>
   </figure>`;
 }
@@ -61,9 +57,9 @@ function hero(): string {
       <p class="lp-lede">Create adaptive HLS, a web-ready MP4, captions, and embeds from one source video.</p>
       <div class="lp-actions">
         <a href="/upload" class="btn btn-primary btn-lg">Upload video</a>
-        <a href="#demo-output" class="btn btn-ghost btn-lg">Watch demo</a>
+        <a href="#demo-output" class="btn btn-ghost btn-lg" id="watch-demo" aria-controls="demo-player">Watch demo</a>
       </div>
-      <p class="lp-limit">MP4, MOV, MKV, WebM, AVI, or M4V. Up to 4 GB.</p>
+      <p class="lp-limit">MP4, MOV, MKV, WebM, AVI, or M4V. Up to 5 minutes and 4 GB.</p>
     </div>
     ${outputProof()}
   </section>`;
@@ -112,6 +108,7 @@ function closingAction(): string {
 }
 
 export function mount(root: HTMLElement): () => void {
+  const events = new AbortController();
   root.innerHTML = `${siteHeader()}
     <main id="main-content" class="lp-main">
       ${hero()}
@@ -121,5 +118,41 @@ export function mount(root: HTMLElement): () => void {
     </main>
     ${siteFooter()}`;
 
-  return () => {};
+  const playerMount = root.querySelector<HTMLElement>("#demo-player");
+  const player = playerMount
+    ? mountPlayer(playerMount, {
+        playlist: "/demo/sintel/master.m3u8",
+        poster: "/demo/sintel-cinematic-poster.webp",
+        storyboard: DEMO_STORYBOARD,
+        spriteUrl: "/demo/sintel-cinematic-storyboard.webp",
+      })
+    : null;
+
+  root.querySelector("#watch-demo")?.addEventListener(
+    "click",
+    () => {
+      const video = playerMount?.querySelector<HTMLVideoElement>("video");
+      video?.focus({ preventScroll: true });
+      void player?.play();
+    },
+    { signal: events.signal },
+  );
+  root.querySelectorAll<HTMLButtonElement>("[data-demo-quality]").forEach((button) => {
+    button.addEventListener(
+      "click",
+      () => {
+        const height = Number(button.dataset.demoQuality);
+        if (!player?.selectQuality(height)) return;
+        root.querySelectorAll("[data-demo-quality]").forEach((item) =>
+          item.setAttribute("aria-pressed", String(item === button)),
+        );
+      },
+      { signal: events.signal },
+    );
+  });
+
+  return () => {
+    events.abort();
+    player?.destroy();
+  };
 }

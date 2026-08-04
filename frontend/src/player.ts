@@ -6,7 +6,9 @@ import { applySprite, showTile, tileForFraction } from "./sprite";
 
 export interface PlayerHandle {
   destroy(): void;
+  play(): Promise<void>;
   reload(): void;
+  selectQuality(height: number | null): boolean;
 }
 
 interface Level {
@@ -84,6 +86,7 @@ export function mountPlayer(
   let controlsTimer: number | null = null;
   let statusTimer: number | null = null;
   let loadingStarted = false;
+  let pendingQuality: number | null | undefined;
   let seeking = false;
   let destroyed = false;
 
@@ -214,19 +217,39 @@ export function mountPlayer(
     timeEl.textContent = `${humanDuration(video.currentTime)} / ${humanDuration(video.duration)}`;
   }
 
-  async function togglePlayback(): Promise<void> {
+  async function play(): Promise<void> {
+    if (!video.paused) return;
     try {
-      if (video.paused) {
-        if (hls && !loadingStarted) {
-          hls.startLoad();
-          loadingStarted = true;
-        }
-        await video.play();
+      if (hls && !loadingStarted) {
+        hls.startLoad();
+        loadingStarted = true;
       }
-      else video.pause();
+      await video.play();
     } catch {
       showError("Playback could not start. Check your connection and try again.");
     }
+  }
+
+  async function togglePlayback(): Promise<void> {
+    if (video.paused) await play();
+    else video.pause();
+  }
+
+  function selectQuality(height: number | null): boolean {
+    pendingQuality = height;
+    if (!hls) return false;
+    if (height === null) {
+      hls.currentLevel = -1;
+      quality.value = "-1";
+      showStatus("Automatic quality selected.");
+      return true;
+    }
+    const level = hls.levels.findIndex((item) => item.height === height);
+    if (level < 0) return hls.levels.length === 0;
+    quality.value = String(level);
+    hls.currentLevel = level;
+    showStatus(`${height}p selected.`);
+    return true;
   }
 
   function attachTransport(): void {
@@ -258,6 +281,7 @@ export function mountPlayer(
         instance.subtitleTrack = -1;
         instance.subtitleDisplay = false;
         renderLevels();
+        if (pendingQuality !== undefined) selectQuality(pendingQuality);
         syncCaptions();
       });
       instance.on(Hls.Events.LEVEL_SWITCHED, (_event, data) => {
@@ -415,6 +439,8 @@ export function mountPlayer(
   syncVolume();
 
   return {
+    play,
+    selectQuality,
     reload() {
       if (destroyed) return;
       hideError();

@@ -69,8 +69,7 @@
   line-height: 1.5;
 }
 
-/* The visual is generated from fixtures/_demo.mp4, so the product proof is
-   immediate, privacy-safe, and independent of backend availability. */
+/* The checked-in demo stays playable independently of backend availability. */
 .lp-proof {
   min-width: 0;
   overflow: hidden;
@@ -88,35 +87,89 @@
   background: oklch(0.06 0.004 70);
 }
 
-.lp-proof-poster {
-  display: block;
+.lp-demo-player.player {
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  border-radius: 0;
+  box-shadow: none;
 }
 
-.lp-proof-frame::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(to top, oklch(0.06 0.004 70 / 0.72), transparent 42%);
+.lp-demo-player .player-video {
+  height: 100%;
+  max-height: none;
+  object-fit: contain;
+}
+
+.lp-demo-player .pl-center-play {
+  width: 44px;
+  height: 44px;
+  min-width: 44px;
+  min-height: 44px;
+  border-color: rgb(255 255 255 / 10%);
+  background: rgb(8 8 9 / 30%);
+  box-shadow: 0 3px 12px rgb(0 0 0 / 16%);
+  backdrop-filter: blur(5px);
+}
+
+.lp-demo-player .pl-center-play .icon {
+  width: 18px;
+  height: 18px;
+}
+
+.lp-demo-player .pl-center-play:hover {
+  background: oklch(0.66 0.19 34 / 0.54);
+}
+
+.lp-demo-player .player-chrome {
+  gap: var(--sp-1);
+  padding: var(--sp-6) var(--sp-2) var(--sp-2);
+  background: linear-gradient(to top, rgb(0 0 0 / 38%), transparent);
+}
+
+.lp-demo-player:not(.player--playing):not(:focus-within) .player-chrome {
+  opacity: 0;
   pointer-events: none;
+  transform: translateY(8px);
 }
 
-.lp-proof-frame-meta {
-  position: absolute;
-  right: var(--sp-4);
-  bottom: var(--sp-3);
-  left: var(--sp-4);
-  z-index: 1;
-  display: flex;
-  justify-content: space-between;
-  color: oklch(0.96 0.008 80);
-  font-family: var(--font-mono);
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+.lp-demo-player .pl-btn {
+  color: rgb(255 255 255 / 82%);
+}
+
+.lp-demo-player .pl-btn:hover {
+  background: rgb(255 255 255 / 8%);
+  color: #fff;
+}
+
+.lp-demo-player .pl-time {
+  color: rgb(255 255 255 / 68%);
+}
+
+.lp-demo-player .pl-quality-select {
+  border-color: transparent;
+  background: transparent;
+  color: rgb(255 255 255 / 82%);
+}
+
+.lp-demo-player .pl-quality-select:hover {
+  background: rgb(8 8 9 / 28%);
+}
+
+.lp-demo-player .pl-vol {
+  display: none;
+}
+
+.lp-demo-player .pl-cc-on {
+  background: oklch(0.66 0.19 34 / 0.58);
+  color: #fff;
+}
+
+.lp-demo-player .pl-status {
+  top: var(--sp-2);
+  bottom: auto;
+  background: rgb(8 8 9 / 68%);
+  box-shadow: none;
+  backdrop-filter: blur(5px);
 }
 
 .lp-proof-details {
@@ -128,7 +181,7 @@
 
 .lp-proof-heading {
   display: flex;
-  align-items: flex-start;
+  align-items: flex-end;
   justify-content: space-between;
   gap: var(--sp-4);
 }
@@ -146,35 +199,26 @@
   letter-spacing: -0.02em;
 }
 
-.lp-proof-specs {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+.lp-proof-meta {
+  color: var(--text-xdim);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.lp-proof-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  padding-top: var(--sp-3);
   border-top: 1px solid var(--border);
-  border-bottom: 1px solid var(--border);
 }
 
-.lp-proof-specs div {
-  min-width: 0;
-  padding: var(--sp-3) 0;
-}
-
-.lp-proof-specs div + div {
-  padding-left: var(--sp-3);
-  border-left: 1px solid var(--border);
-}
-
-.lp-proof-specs dt {
+.lp-proof-control-label {
   color: var(--text-xdim);
   font-size: 12px;
-}
-
-.lp-proof-specs dd {
-  margin-top: var(--sp-1);
-  overflow-wrap: anywhere;
-  color: var(--text);
-  font-family: var(--font-mono);
-  font-size: 13px;
-  font-variant-numeric: tabular-nums;
 }
 
 .lp-proof-outputs {
@@ -183,8 +227,9 @@
   gap: var(--sp-2);
 }
 
-.lp-proof-outputs span {
+.lp-proof-outputs button {
   padding: var(--sp-1) var(--sp-2);
+  border: 1px solid transparent;
   border-radius: var(--r-sm);
   background: var(--surface-2);
   color: var(--text-dim);
@@ -193,17 +238,34 @@
   font-variant-numeric: tabular-nums;
 }
 
-.lp-proof-caption {
-  color: var(--text-dim);
-  font-size: 13px;
+.lp-proof-outputs button {
+  cursor: pointer;
+  transition:
+    border-color var(--transition),
+    background var(--transition),
+    color var(--transition);
 }
 
-.lp-proof-storyboard {
-  display: block;
-  width: 100%;
-  height: 64px;
-  border-radius: var(--r-sm);
-  object-fit: cover;
+.lp-proof-outputs button:hover,
+.lp-proof-outputs button[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: var(--accent-glow);
+  color: var(--text);
+}
+
+.lp-proof-credit {
+  color: var(--text-xdim);
+  font-size: 12px;
+}
+
+.lp-proof-credit a {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 0.18em;
+}
+
+.lp-proof-credit a:hover {
+  color: var(--text);
 }
 
 /* Privacy is a rail, not another generic card. */
@@ -409,19 +471,18 @@
     width: 100%;
   }
 
-  .lp-proof-heading,
-  .lp-proof-specs {
-    grid-template-columns: 1fr;
-  }
-
   .lp-proof-heading {
     flex-direction: column;
+    align-items: flex-start;
   }
 
-  .lp-proof-specs div + div {
-    padding-left: 0;
-    border-top: 1px solid var(--border);
-    border-left: 0;
+  .lp-proof-meta {
+    text-align: left;
+  }
+
+  .lp-proof-controls {
+    flex-wrap: wrap;
+    justify-content: flex-start;
   }
 
   .lp-trust,
