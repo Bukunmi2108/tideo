@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const hlsState = vi.hoisted(() => ({
+  configs: [] as Array<Record<string, unknown>>,
   instances: [] as Array<Record<string, any>>,
   supported: true,
 }));
@@ -31,7 +32,8 @@ vi.mock("hls.js", () => {
     recoverMediaError = vi.fn();
     destroy = vi.fn();
 
-    constructor() {
+    constructor(config: Record<string, unknown>) {
+      hlsState.configs.push(config);
       hlsState.instances.push(this);
     }
 
@@ -54,6 +56,7 @@ beforeEach(() => {
   root = document.createElement("div");
   document.body.appendChild(root);
   hlsState.instances.length = 0;
+  hlsState.configs.length = 0;
   hlsState.supported = true;
 });
 
@@ -105,8 +108,90 @@ describe("player", () => {
     quality.dispatchEvent(new Event("change", { bubbles: true }));
     expect(hls.currentLevel).toBe(1);
 
+    quality.value = "-1";
+    quality.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(hls.currentLevel).toBe(-1);
+
     handle.destroy();
     expect(hls.destroy).toHaveBeenCalledOnce();
+  });
+
+  it("defers media loading until explicit play and starts only once", async () => {
+    const handle = mountPlayer(root, { playlist: "/master.m3u8" });
+    const hls = hlsState.instances[0] as any;
+    expect(hlsState.configs[0]).toMatchObject({
+      enableWorker: true,
+      autoStartLoad: false,
+      startLevel: -1,
+      maxBufferLength: 20,
+      maxMaxBufferLength: 30,
+    });
+    expect(hls.startLoad).not.toHaveBeenCalled();
+
+    const video = root.querySelector("video") as HTMLVideoElement;
+    let paused = true;
+    Object.defineProperty(video, "paused", {
+      configurable: true,
+      get: () => paused,
+    });
+    vi.spyOn(video, "play").mockImplementation(async () => {
+      paused = false;
+      video.dispatchEvent(new Event("play"));
+    });
+    vi.spyOn(video, "pause").mockImplementation(() => {
+      paused = true;
+      video.dispatchEvent(new Event("pause"));
+    });
+
+    (root.querySelector(".pl-center-play") as HTMLButtonElement).click();
+    await vi.waitFor(() => expect(hls.startLoad).toHaveBeenCalledOnce());
+    (root.querySelector(".pl-play") as HTMLButtonElement).click();
+    (root.querySelector(".pl-play") as HTMLButtonElement).click();
+    await vi.waitFor(() => expect(video.play).toHaveBeenCalledTimes(2));
+    expect(hls.startLoad).toHaveBeenCalledOnce();
+
+    handle.destroy();
+  });
+
+  it("shows the active rendition while remaining in automatic mode", () => {
+    const handle = mountPlayer(root, { playlist: "/master.m3u8" });
+    const hls = hlsState.instances[0] as any;
+    hls.emit("manifest-parsed");
+    const quality = root.querySelector(".pl-quality-select") as HTMLSelectElement;
+
+    hls.emit("level-switched", { level: 0 });
+    expect(quality.value).toBe("-1");
+    expect(quality.selectedOptions[0].textContent).toBe("Auto · 480p");
+
+    quality.value = "1";
+    quality.dispatchEvent(new Event("change", { bubbles: true }));
+    hls.emit("level-switched", { level: 0 });
+    expect(quality.value).toBe("1");
+    expect(
+      Array.from(quality.options).find((option) => option.value === "1")
+        ?.textContent,
+    ).toBe("720p");
+
+    handle.destroy();
+  });
+
+  it("reloads an active transport from the current playback position", () => {
+    const handle = mountPlayer(root, { playlist: "/master.m3u8" });
+    const hls = hlsState.instances[0] as any;
+    const video = root.querySelector("video") as HTMLVideoElement;
+    Object.defineProperty(video, "currentTime", {
+      configurable: true,
+      writable: true,
+      value: 12,
+    });
+    vi.spyOn(video, "play").mockResolvedValue();
+
+    (root.querySelector(".pl-center-play") as HTMLButtonElement).click();
+    handle.reload();
+
+    expect(hls.loadSource).toHaveBeenCalledTimes(2);
+    expect(hls.startLoad).toHaveBeenNthCalledWith(2, 12);
+    handle.destroy();
   });
 
   it("toggles captions and exposes the selected state to assistive technology", () => {
@@ -120,12 +205,22 @@ describe("player", () => {
     captions.click();
     expect(hls.subtitleTrack).toBe(0);
     expect(captions.getAttribute("aria-pressed")).toBe("true");
+    expect(captions.getAttribute("aria-label")).toBe("Turn captions off");
+    const status = root.querySelector(".pl-status") as HTMLElement;
+    expect(status.hidden).toBe(false);
+    expect(status.textContent).toBe(
+      "Captions on — dialogue will appear when available.",
+    );
+
+    captions.click();
+    expect(status.textContent).toBe("Captions off.");
 
     handle.destroy();
   });
 
   it("supports familiar video keyboard controls from the player surface", () => {
     const handle = mountPlayer(root, { playlist: "/master.m3u8" });
+    const hls = hlsState.instances[0] as any;
     const video = root.querySelector("video") as HTMLVideoElement;
     const play = vi.spyOn(video, "play").mockResolvedValue();
     Object.defineProperty(video, "duration", { configurable: true, value: 60 });
@@ -137,6 +232,11 @@ describe("player", () => {
     expect(video.currentTime).toBe(25);
     video.dispatchEvent(new KeyboardEvent("keydown", { key: "m", bubbles: true }));
     expect(video.muted).toBe(true);
+    hls.subtitleTracks = [{}];
+    hls.emit("subtitle-tracks-updated");
+    video.dispatchEvent(new KeyboardEvent("keydown", { key: "c", bubbles: true }));
+    expect(hls.subtitleTrack).toBe(0);
+    expect(root.querySelector(".pl-status")?.textContent).toContain("Captions on");
 
     handle.destroy();
   });
@@ -171,6 +271,10 @@ describe("player", () => {
   it("surfaces an expired-stream recovery after bounded HLS retries", () => {
     const handle = mountPlayer(root, { playlist: "/master.m3u8" });
     const hls = hlsState.instances[0] as any;
+    const video = root.querySelector("video") as HTMLVideoElement;
+    vi.spyOn(video, "play").mockResolvedValue();
+    (root.querySelector(".pl-center-play") as HTMLButtonElement).click();
+    hls.startLoad.mockClear();
     for (let attempt = 0; attempt < 4; attempt += 1)
       hls.emit("error", { fatal: true, type: "network-error" });
 
@@ -181,6 +285,17 @@ describe("player", () => {
     (root.querySelector(".player-retry") as HTMLButtonElement).click();
     expect(hlsState.instances).toHaveLength(2);
 
+    handle.destroy();
+  });
+
+  it("retries a failed manifest without starting media before Play", () => {
+    const handle = mountPlayer(root, { playlist: "/master.m3u8" });
+    const hls = hlsState.instances[0] as any;
+
+    hls.emit("error", { fatal: true, type: "network-error" });
+
+    expect(hls.startLoad).not.toHaveBeenCalled();
+    expect(hls.loadSource).toHaveBeenCalledTimes(2);
     handle.destroy();
   });
 

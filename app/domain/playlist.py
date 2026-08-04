@@ -1,3 +1,4 @@
+import math
 from dataclasses import dataclass
 
 _PROFILE_IDC = {"Baseline": "42", "Constrained Baseline": "42", "Main": "4d", "High": "64"}
@@ -6,11 +7,17 @@ def avc1_codec(profile: str, level: int) -> str:
     idc = _PROFILE_IDC.get(profile, "4d")
     return f"avc1.{idc}00{level:02x}"
 
-def bandwidth(output_bytes: int, duration: float) -> int:
-    """Measured bitrate (bits/s) from actual output, padded ~10% for peak. NOT the configured target."""
-    if not duration:
-        return 0
-    return int(output_bytes * 8 / duration * 1.1)
+def bandwidths(segments: list[tuple[int, float]]) -> tuple[int, int]:
+    """Return the peak segment and whole-rendition bitrates required by HLS."""
+    if not segments:
+        raise ValueError("rendition has no media segments")
+    if any(size < 0 or not math.isfinite(duration) or duration <= 0
+           for size, duration in segments):
+        raise ValueError("rendition has an invalid segment measurement")
+    peak = max(math.ceil(size * 8 / duration) for size, duration in segments)
+    average = int(sum(size for size, _ in segments) * 8
+                  / sum(duration for _, duration in segments))
+    return peak, average
 
 @dataclass(frozen=True)
 class Variant:
@@ -19,6 +26,7 @@ class Variant:
     width: int
     height: int
     codecs: str
+    average_bandwidth: int | None = None
 
 SUBS_GROUP = "subs"
 
@@ -32,8 +40,10 @@ def build_master(variants: list[Variant], *, has_subtitles: bool = False) -> str
         )
     subs_attr = f',SUBTITLES="{SUBS_GROUP}"' if has_subtitles else ""
     for v in sorted(variants, key=lambda x: x.bandwidth, reverse=True):
+        average = (f",AVERAGE-BANDWIDTH={v.average_bandwidth}"
+                   if v.average_bandwidth is not None else "")
         lines.append(
-            f'#EXT-X-STREAM-INF:BANDWIDTH={v.bandwidth},'
+            f'#EXT-X-STREAM-INF:BANDWIDTH={v.bandwidth}{average},'
             f'RESOLUTION={v.width}x{v.height},CODECS="{v.codecs}"{subs_attr}'
         )
         lines.append(f"playlist/{v.preset}")
@@ -56,13 +66,24 @@ def build_subtitle_media_playlist(duration: float) -> str:
     ]) + "\n"
 
 def build_manifest(job_id: str, duration: float, variants: list[Variant],
-                   *, web_remuxed: bool, created_at: str | None, storyboard: dict | None = None) -> dict:
+                   *, web_remuxed: bool, created_at: str | None,
+                   media_start_time: float,
+                   storyboard: dict | None = None) -> dict:
     """Build the public manifest; late subtitle completion also reads its rendition metadata."""
     return {
         "job_id": job_id,
         "duration": duration,
-        "renditions": [{"preset": v.preset, "bandwidth": v.bandwidth,
-                        "resolution": f"{v.width}x{v.height}", "codecs": v.codecs} for v in variants],
+        "renditions": [
+            {
+                "preset": v.preset,
+                "bandwidth": v.bandwidth,
+                **({"average_bandwidth": v.average_bandwidth}
+                   if v.average_bandwidth is not None else {}),
+                "resolution": f"{v.width}x{v.height}",
+                "codecs": v.codecs,
+            }
+            for v in variants
+        ],
         "master": "master.m3u8",
         "web_mp4": "web.mp4",
         "web_remuxed": web_remuxed,
@@ -70,4 +91,5 @@ def build_manifest(job_id: str, duration: float, variants: list[Variant],
         "sprite": "sprite.jpg",
         "storyboard": storyboard,
         "created_at": created_at,
+        "media_start_time": media_start_time,
     }

@@ -14,6 +14,7 @@ export const LADDER: Rung[] = [
   { preset: "720p", label: "720p", height: 720, resolution: "1280x720" },
   { preset: "480p", label: "480p", height: 480, resolution: "854x480" },
   { preset: "360p", label: "360p", height: 360, resolution: "640x360" },
+  { preset: "240p", label: "240p", height: 240, resolution: "426x240" },
 ];
 
 // Conservative encode-time ratios; Phase 8.3 replaces these with measured values.
@@ -22,6 +23,7 @@ export const ESTIMATE_RATIOS: Record<string, number> = {
   "720p": 0.35,
   "480p": 0.22,
   "360p": 0.15,
+  "240p": 0.11,
 };
 
 export interface PickerRow extends Rung {

@@ -1,14 +1,14 @@
 from app.domain.errors import SOURCE_LIMITS_EXCEEDED
 from app.workers.ffprobe import InspectError, SourceMeta
 
-LADDER = [("1080p", 1080), ("720p", 720), ("480p", 480), ("360p", 360)]
+LADDER = [("1080p", 1080), ("720p", 720), ("480p", 480), ("360p", 360), ("240p", 240)]
 
 MAX_W, MAX_H = 7680, 4320
 MAX_BITRATE = 200_000_000
 
 def recommended_presets(display_height: int) -> list[str]:
     rungs = [name for name, h in LADDER if h <= display_height]
-    return rungs or ["360p"]
+    return rungs or ["240p"]
 
 def web_safe(meta: SourceMeta) -> tuple[bool, str | None]:
     reasons = []

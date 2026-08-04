@@ -26,17 +26,17 @@ def meta(**kw) -> SourceMeta:
 # ---- recommended_presets ----
 
 def test_full_ladder_at_or_above_1080():
-    assert recommend.recommended_presets(1440) == ["1080p", "720p", "480p", "360p"]
-    assert recommend.recommended_presets(1080) == ["1080p", "720p", "480p", "360p"]
+    assert recommend.recommended_presets(1440) == ["1080p", "720p", "480p", "360p", "240p"]
+    assert recommend.recommended_presets(1080) == ["1080p", "720p", "480p", "360p", "240p"]
 
 
 def test_ladder_capped_to_source_height():
-    assert recommend.recommended_presets(720) == ["720p", "480p", "360p"]
-    assert recommend.recommended_presets(480) == ["480p", "360p"]
+    assert recommend.recommended_presets(720) == ["720p", "480p", "360p", "240p"]
+    assert recommend.recommended_presets(480) == ["480p", "360p", "240p"]
 
 
 def test_ladder_never_empty():
-    assert recommend.recommended_presets(200) == ["360p"]
+    assert recommend.recommended_presets(200) == ["240p"]
 
 
 # ---- web_safe ----

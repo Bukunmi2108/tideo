@@ -9,7 +9,7 @@ import {
 
 describe("buildPicker", () => {
   it("pre-checks recommended rungs and disables the rest with a reason", () => {
-    const rows = buildPicker(["480p", "360p"], 480);
+    const rows = buildPicker(["480p", "360p", "240p"], 480);
     const byPreset = Object.fromEntries(rows.map((r) => [r.preset, r]));
 
     expect(byPreset["480p"].available).toBe(true);
@@ -24,12 +24,16 @@ describe("buildPicker", () => {
   });
 
   it("returns the full ladder in catalog (highest-first) order", () => {
-    const rows = buildPicker(["1080p", "720p", "480p", "360p"], 1080);
+    const rows = buildPicker(
+      ["1080p", "720p", "480p", "360p", "240p"],
+      1080,
+    );
     expect(rows.map((r) => r.preset)).toEqual([
       "1080p",
       "720p",
       "480p",
       "360p",
+      "240p",
     ]);
     expect(rows.every((r) => r.available && r.checked)).toBe(true);
   });
@@ -46,6 +50,17 @@ describe("buildPicker", () => {
     const rows = buildPicker([], 720);
     expect(rows).toHaveLength(LADDER.length);
     expect(rows.every((r) => !r.available && r.reason !== null)).toBe(true);
+  });
+
+  it("includes a checked 240p floor when the backend recommends it", () => {
+    const rows = buildPicker(["240p"], 240);
+    const low = rows.find((row) => row.preset === "240p");
+    expect(low).toMatchObject({
+      available: true,
+      checked: true,
+      resolution: "426x240",
+    });
+    expect(ESTIMATE_RATIOS["240p"]).toBeGreaterThan(0);
   });
 });
 

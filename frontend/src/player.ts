@@ -38,6 +38,7 @@ export function mountPlayer(
       <button class="btn btn-ghost player-retry" type="button">${icon("retry")} Retry playback</button>
     </div>
     <div class="pl-preview" hidden><div class="pl-preview-img"></div><span class="pl-preview-time">0:00</span></div>
+    <p class="pl-status" role="status" aria-live="polite" hidden></p>
     <div class="player-chrome">
       <button class="pl-btn pl-play" type="button" aria-label="Play">${icon("play")}</button>
       <input class="pl-seek" type="range" min="0" max="1000" value="0" aria-label="Seek" />
@@ -72,6 +73,7 @@ export function mountPlayer(
   const error = container.querySelector<HTMLDivElement>(".player-error")!;
   const errorCopy = container.querySelector<HTMLElement>(".player-error-copy")!;
   const retry = container.querySelector<HTMLButtonElement>(".player-retry")!;
+  const status = container.querySelector<HTMLElement>(".pl-status")!;
   const preview = container.querySelector<HTMLDivElement>(".pl-preview")!;
   const previewImg = container.querySelector<HTMLDivElement>(".pl-preview-img")!;
   const previewTime = container.querySelector<HTMLSpanElement>(".pl-preview-time")!;
@@ -80,6 +82,8 @@ export function mountPlayer(
   let hls: Hls | null = null;
   let levels: Level[] = [{ level: -1, label: "Auto" }];
   let controlsTimer: number | null = null;
+  let statusTimer: number | null = null;
+  let loadingStarted = false;
   let seeking = false;
   let destroyed = false;
 
@@ -94,6 +98,21 @@ export function mountPlayer(
   function clearControlsTimer(): void {
     if (controlsTimer !== null) window.clearTimeout(controlsTimer);
     controlsTimer = null;
+  }
+
+  function clearStatusTimer(): void {
+    if (statusTimer !== null) window.clearTimeout(statusTimer);
+    statusTimer = null;
+  }
+
+  function showStatus(message: string): void {
+    clearStatusTimer();
+    status.textContent = message;
+    status.hidden = false;
+    statusTimer = window.setTimeout(() => {
+      status.hidden = true;
+      statusTimer = null;
+    }, CONTROL_TIMEOUT);
   }
 
   function showControls(keepVisible = false): void {
@@ -143,22 +162,32 @@ export function mountPlayer(
       ? hls.subtitleTrack >= 0
       : tracks.some((track) => track.mode === "showing");
     captions.setAttribute("aria-pressed", String(enabled));
+    captions.setAttribute(
+      "aria-label",
+      enabled ? "Turn captions off" : "Turn captions on",
+    );
     captions.classList.toggle("pl-cc-on", enabled);
   }
 
   function toggleCaptions(): void {
+    let enabled = false;
     if (hls && hls.subtitleTracks.length > 0) {
-      const enabled = hls.subtitleTrack >= 0;
+      enabled = hls.subtitleTrack >= 0;
       hls.subtitleDisplay = !enabled;
       hls.subtitleTrack = enabled ? -1 : 0;
     } else {
       const tracks = nativeTracks();
-      const enabled = tracks.some((track) => track.mode === "showing");
+      enabled = tracks.some((track) => track.mode === "showing");
       tracks.forEach((track, index) => {
         track.mode = !enabled && index === 0 ? "showing" : "disabled";
       });
     }
     syncCaptions();
+    showStatus(
+      enabled
+        ? "Captions off."
+        : "Captions on — dialogue will appear when available.",
+    );
   }
 
   function syncPlay(): void {
@@ -187,7 +216,13 @@ export function mountPlayer(
 
   async function togglePlayback(): Promise<void> {
     try {
-      if (video.paused) await video.play();
+      if (video.paused) {
+        if (hls && !loadingStarted) {
+          hls.startLoad();
+          loadingStarted = true;
+        }
+        await video.play();
+      }
       else video.pause();
     } catch {
       showError("Playback could not start. Check your connection and try again.");
@@ -197,9 +232,16 @@ export function mountPlayer(
   function attachTransport(): void {
     hls?.destroy();
     hls = null;
+    loadingStarted = false;
     hideError();
     if (Hls.isSupported()) {
-      const instance = new Hls({ enableWorker: true });
+      const instance = new Hls({
+        enableWorker: true,
+        autoStartLoad: false,
+        startLevel: -1,
+        maxBufferLength: 20,
+        maxMaxBufferLength: 30,
+      });
       hls = instance;
       let recoveryAttempts = 0;
       instance.loadSource(opts.playlist);
@@ -218,6 +260,13 @@ export function mountPlayer(
         renderLevels();
         syncCaptions();
       });
+      instance.on(Hls.Events.LEVEL_SWITCHED, (_event, data) => {
+        if (destroyed || hls !== instance || quality.value !== "-1") return;
+        const height = instance.levels[data.level]?.height;
+        if (!height) return;
+        levels[0] = { level: -1, label: `Auto · ${height}p` };
+        renderLevels();
+      });
       instance.on(Hls.Events.SUBTITLE_TRACKS_UPDATED, syncCaptions);
       instance.on(Hls.Events.ERROR, (_event, data) => {
         if (!data.fatal || hls !== instance) return;
@@ -226,7 +275,8 @@ export function mountPlayer(
           data.type === Hls.ErrorTypes.NETWORK_ERROR
         ) {
           recoveryAttempts += 1;
-          instance.startLoad();
+          if (loadingStarted) instance.startLoad();
+          else instance.loadSource(opts.playlist);
         } else if (
           recoveryAttempts < 3 &&
           data.type === Hls.ErrorTypes.MEDIA_ERROR
@@ -236,6 +286,7 @@ export function mountPlayer(
         } else {
           instance.destroy();
           hls = null;
+          loadingStarted = false;
           showError("This stream is unavailable or may have expired.");
         }
       });
@@ -367,16 +418,27 @@ export function mountPlayer(
     reload() {
       if (destroyed) return;
       hideError();
-      if (hls) hls.loadSource(opts.playlist);
+      if (hls) {
+        const shouldLoad = loadingStarted || !video.paused;
+        const startPosition = video.currentTime;
+        loadingStarted = false;
+        hls.loadSource(opts.playlist);
+        if (shouldLoad) {
+          hls.startLoad(startPosition);
+          loadingStarted = true;
+        }
+      }
       else if (video.src) video.load();
       else attachTransport();
     },
     destroy() {
       destroyed = true;
       clearControlsTimer();
+      clearStatusTimer();
       events.abort();
       hls?.destroy();
       hls = null;
+      loadingStarted = false;
       video.removeAttribute("src");
       container.replaceChildren();
       container.classList.remove(

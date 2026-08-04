@@ -223,6 +223,27 @@
   color: var(--accent-ink);
 }
 
+.pl-status {
+  position: absolute;
+  right: var(--sp-3);
+  bottom: 68px;
+  z-index: 4;
+  max-width: min(34ch, calc(100% - var(--sp-6)));
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid rgb(255 255 255 / 18%);
+  border-radius: var(--r-sm);
+  background: rgb(5 5 8 / 88%);
+  box-shadow: var(--shadow-md);
+  color: rgb(255 255 255 / 88%);
+  font-size: 12px;
+  line-height: 1.45;
+  pointer-events: none;
+}
+
+.pl-status[hidden] {
+  display: none;
+}
+
 .pl-preview {
   position: absolute;
   bottom: 66px;

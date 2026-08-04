@@ -16,6 +16,7 @@ PRESETS: dict[str, Preset] = {
     "720p":  Preset("720p",  1280,  720, "2800k", "2996k", "4200k", "128k", "high"),
     "480p":  Preset("480p",   854,  480, "1400k", "1498k", "2100k",  "96k", "main"),
     "360p":  Preset("360p",   640,  360,  "800k",  "856k", "1200k",  "96k", "main"),
+    "240p":  Preset("240p",   426,  240,  "400k",  "428k",  "600k",  "64k", "main"),
 }
 
 def gop_size(fps: float) -> int:

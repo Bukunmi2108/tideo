@@ -38,7 +38,7 @@ function outputProof(): string {
         <div><dt>Codecs</dt><dd>H.264 / AAC</dd></div>
       </dl>
       <div class="lp-proof-outputs" aria-label="Generated output summary">
-        <span>720p</span><span>480p</span><span>360p</span><span>HLS</span><span>MP4</span>
+        <span>720p</span><span>480p</span><span>360p</span><span>240p</span><span>HLS</span><span>MP4</span>
       </div>
       <p class="lp-proof-caption">Captions: not requested for this synthetic demo.</p>
       <img
