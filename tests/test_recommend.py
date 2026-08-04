@@ -67,6 +67,15 @@ def test_caps_pass_for_normal_source():
     recommend.check_caps(meta(), 7200)   # must not raise
 
 
+def test_duration_cap_includes_exact_boundary_and_rejects_longer_source():
+    recommend.check_caps(meta(duration=300.0), 300)
+
+    with pytest.raises(InspectError) as exc:
+        recommend.check_caps(meta(duration=300.001), 300)
+
+    assert exc.value.code == SOURCE_LIMITS_EXCEEDED
+
+
 @pytest.mark.parametrize("kw", [
     {"width": 9000, "height": 5000},     # > 8K
     {"duration": 99999.0},               # > max_seconds

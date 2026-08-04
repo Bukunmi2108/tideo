@@ -20,6 +20,7 @@ def test_derived_paths_from_data_dir():
 def test_typed_defaults():
     cfg = _cfg()
     assert cfg.max_upload_bytes == 4 * 1024**3
+    assert cfg.max_source_seconds == 5 * 60
     assert cfg.data_dir == Path("/data")
     assert cfg.profile == "dev"
     assert cfg.allowed_origin_list == ["http://localhost:5173"]

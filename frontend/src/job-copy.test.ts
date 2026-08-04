@@ -47,4 +47,15 @@ describe("job copy", () => {
     expect(message).toContain("appears damaged or incomplete");
     expect(message).not.toContain("moov atom");
   });
+
+  it("states the duration limit when inspection rejects a source", () => {
+    expect(
+      failureMessage({
+        code: "SOURCE_LIMITS_EXCEEDED",
+        message: "duration 301s exceeds 300s",
+        stage: "inspect",
+        retryable: false,
+      }),
+    ).toContain("up to 5 minutes");
+  });
 });

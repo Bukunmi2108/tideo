@@ -34,7 +34,7 @@ class Config(BaseSettings):
 
     data_dir: Path = Path("/data")
     max_upload_bytes: int = 4 * 1024**3
-    max_source_seconds: int = 7200
+    max_source_seconds: int = 5 * 60
     storage_budget_bytes: int = 50 * 1024**3
     storage_min_free_bytes: int = 512 * 1024**2
     output_ttl_days: int = 7

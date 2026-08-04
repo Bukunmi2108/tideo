@@ -1,6 +1,6 @@
 import { apiBase, type UploadResponse } from "./api";
 import { icon } from "./icons";
-import { esc, humanBytes, siteFooter, siteHeader } from "./render";
+import { esc, humanBytes, humanDuration, siteFooter, siteHeader } from "./render";
 import { navigate } from "./router";
 import { SESSION_HEADER, guestSession } from "./session";
 import { waitForBackendReady } from "./wake";
@@ -15,7 +15,7 @@ type UploadingState = {
 
 type WaitingState = {
   tag: "waiting";
-  phase: "backend" | "retry";
+  phase: "metadata" | "backend" | "retry";
   file: File;
   attempt: number;
   delayMs?: number;
@@ -37,7 +37,35 @@ type State =
 
 const ALLOWED_EXTS = [".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v"];
 const MAX_BYTES = 4 * 1024 ** 3;
+const MAX_DURATION_SECONDS = 5 * 60;
 const MAX_UPLOAD_RETRIES = 3;
+
+type DurationReader = (file: File) => Promise<number | null>;
+
+function browserVideoDuration(file: File): Promise<number | null> {
+  return new Promise((resolve) => {
+    const video = document.createElement("video");
+    const url = URL.createObjectURL(file);
+    let settled = false;
+    const finish = (duration: number | null): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      video.removeAttribute("src");
+      video.load();
+      URL.revokeObjectURL(url);
+      resolve(duration);
+    };
+    const timer = setTimeout(() => finish(null), 3_000);
+    video.preload = "metadata";
+    video.onloadedmetadata = () => {
+      const duration = video.duration;
+      finish(Number.isFinite(duration) && duration > 0 ? duration : null);
+    };
+    video.onerror = () => finish(null);
+    video.src = url;
+  });
+}
 
 function validationFailure(files: File[]): Failure | null {
   if (files.length > 1) {
@@ -160,7 +188,11 @@ function isUploadResponse(value: unknown): value is UploadResponse {
   );
 }
 
-export function mount(root: HTMLElement): () => void {
+export function mount(
+  root: HTMLElement,
+  _query: URLSearchParams = new URLSearchParams(),
+  readDuration: DurationReader = browserVideoDuration,
+): () => void {
   let state: State = { tag: "idle" };
   let dragCount = 0;
   let currentXhr: XMLHttpRequest | null = null;
@@ -227,7 +259,7 @@ export function mount(root: HTMLElement): () => void {
       <span class="upload-icon">${icon("upload")}</span>
       <span class="upload-zone-title">Drop or choose a video</span>
       <span class="upload-zone-copy">Browse, drop, or paste a video file from your clipboard.</span>
-      <span class="upload-hint">MP4, MOV, MKV, WEBM, AVI, M4V · One file · Up to 4 GB</span>
+      <span class="upload-hint">MP4, MOV, MKV, WEBM, AVI, M4V · One file · Up to 5 minutes · Up to 4 GB</span>
     </button>`;
   }
 
@@ -249,16 +281,23 @@ export function mount(root: HTMLElement): () => void {
   }
 
   function cardWaiting(waiting: WaitingState): string {
+    const checking = waiting.phase === "metadata";
     const retrying = waiting.phase === "retry";
     const seconds = Math.max(1, Math.ceil((waiting.delayMs ?? 0) / 1000));
-    const title = retrying ? "Retrying upload" : "Starting the temporary service";
-    const copy = retrying
+    const title = checking
+      ? "Checking video length"
+      : retrying
+        ? "Retrying upload"
+        : "Starting the temporary service";
+    const copy = checking
+      ? "Tideo is checking this file locally before upload. Videos must be 5 minutes or shorter."
+      : retrying
       ? `The connection dropped. Tideo will retry automatically in up to ${seconds} seconds. Your file stays in this tab.`
       : "The service sleeps when idle. Your file stays in this tab and the upload will begin automatically when it is ready.";
-    const cancelId = retrying ? "cancel-retry-btn" : "cancel-wake-btn";
+    const cancelId = checking ? "cancel-metadata-btn" : retrying ? "cancel-retry-btn" : "cancel-wake-btn";
     return `<section class="upload-card upload-state" aria-labelledby="upload-state-title" aria-live="polite">
       <span class="upload-icon upload-icon--busy">${icon("spinner")}</span>
-      <span class="upload-state-label">${retrying ? "Connection recovery" : "Service check"}</span>
+      <span class="upload-state-label">${checking ? "File check" : retrying ? "Connection recovery" : "Service check"}</span>
       <h2 id="upload-state-title">${title}</h2>
       <p class="upload-filename" title="${esc(waiting.file.name)}">${esc(waiting.file.name)}</p>
       <p class="upload-state-copy">${copy}</p>
@@ -295,6 +334,7 @@ export function mount(root: HTMLElement): () => void {
   function bind(): void {
     root.querySelector("#drop-zone")?.addEventListener("click", () => fileInput.click());
     root.querySelector("#cancel-upload-btn")?.addEventListener("click", cancelToIdle);
+    root.querySelector("#cancel-metadata-btn")?.addEventListener("click", cancelToIdle);
     root.querySelector("#cancel-wake-btn")?.addEventListener("click", cancelToIdle);
     root.querySelector("#cancel-retry-btn")?.addEventListener("click", cancelToIdle);
     root.querySelector("#choose-another-btn")?.addEventListener("click", () => {
@@ -335,7 +375,7 @@ export function mount(root: HTMLElement): () => void {
     setState({ tag: "rejected", ...failure, file }, focusId);
   }
 
-  function handleFiles(files: File[]): void {
+  async function handleFiles(files: File[]): Promise<void> {
     if (files.length === 0) return;
     stopCurrentOperation();
     const failure = validationFailure(files);
@@ -345,11 +385,24 @@ export function mount(root: HTMLElement): () => void {
     }
 
     const file = files[0];
+    const sequence = operationSequence;
+    setState({ tag: "waiting", phase: "metadata", file, attempt: 0 });
+    const duration = await readDuration(file);
+    if (sequence !== operationSequence) return;
+    if (duration !== null && duration > MAX_DURATION_SECONDS) {
+      reject({
+        code: "DURATION_TOO_LONG",
+        headline: "Video is too long",
+        message: `${file.name} is ${humanDuration(duration)}. The limit is 5 minutes. Choose a shorter video.`,
+        retryable: false,
+      });
+      return;
+    }
     if (navigator.onLine === false) {
       reject(offlineFailure(), file);
       return;
     }
-    void wakeAndUpload(file, operationSequence);
+    void wakeAndUpload(file, sequence);
   }
 
   async function wakeAndUpload(file: File, sequence: number): Promise<void> {
@@ -529,7 +582,7 @@ export function mount(root: HTMLElement): () => void {
       event.preventDefault();
       dragCount = 0;
       document.body.classList.remove("drag-active");
-      handleFiles(Array.from((event as DragEvent).dataTransfer?.files ?? []));
+      void handleFiles(Array.from((event as DragEvent).dataTransfer?.files ?? []));
     },
     { signal },
   );
@@ -539,14 +592,14 @@ export function mount(root: HTMLElement): () => void {
       const files = Array.from((event as ClipboardEvent).clipboardData?.files ?? []);
       if (files.length === 0) return;
       event.preventDefault();
-      handleFiles(files);
+      void handleFiles(files);
     },
     { signal },
   );
   fileInput.addEventListener(
     "change",
     () => {
-      handleFiles(Array.from(fileInput.files ?? []));
+      void handleFiles(Array.from(fileInput.files ?? []));
       fileInput.value = "";
     },
     { signal },

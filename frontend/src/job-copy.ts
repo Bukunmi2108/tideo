@@ -56,7 +56,7 @@ export function failureMessage(error?: JobError): string {
     SOURCE_NO_VIDEO:
       "This file does not contain a video track. Choose a video file and upload it again.",
     SOURCE_LIMITS_EXCEEDED:
-      "This video exceeds the public demo limits. Choose a shorter or lower-resolution file.",
+      "This video exceeds the public demo limits. Choose a video up to 5 minutes long or lower its resolution.",
     INSPECTION_UNAVAILABLE:
       "The inspection service is temporarily unavailable. Upload the video again to retry.",
     ENCODE_FAILED_TRANSIENT:
