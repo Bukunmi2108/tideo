@@ -1,4 +1,6 @@
-from app.domain.vtt import Segment, render_vtt, _timestamp, _wrap
+import pytest
+
+from app.domain.vtt import Segment, _timestamp, _wrap, render_vtt, with_timestamp_map
 
 
 def test_timestamp_formats_hms_millis():
@@ -29,3 +31,25 @@ def test_render_skips_blank_segments_and_renumbers():
 
 def test_render_empty_is_valid_header_only():
     assert render_vtt([]) == "WEBVTT\n\n"
+
+
+def test_timestamp_map_uses_the_mpeg_90khz_clock():
+    mapped = with_timestamp_map("WEBVTT\n\n1\n00:00:00.000 --> 00:00:01.000\nhello\n", 1.4)
+    assert mapped.startswith(
+        "WEBVTT\nX-TIMESTAMP-MAP=LOCAL:00:00:00.000,MPEGTS:126000\n\n"
+    )
+    assert mapped.endswith("00:00:00.000 --> 00:00:01.000\nhello\n")
+
+
+def test_timestamp_map_is_idempotent_and_wraps_at_33_bits():
+    source = "WEBVTT\n\n"
+    once = with_timestamp_map(source, ((1 << 33) + 90_000) / 90_000)
+    twice = with_timestamp_map(once, ((1 << 33) + 90_000) / 90_000)
+    assert once == twice
+    assert "MPEGTS:90000" in once
+
+
+@pytest.mark.parametrize("seconds", [float("nan"), float("inf")])
+def test_timestamp_map_rejects_non_finite_start_time(seconds):
+    with pytest.raises(ValueError):
+        with_timestamp_map("WEBVTT\n\n", seconds)

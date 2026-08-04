@@ -1,7 +1,15 @@
 from pathlib import Path
 
+import pytest
+
 from app.domain.ladder import PRESETS
-from app.domain.playlist import Variant, avc1_codec, bandwidth, build_manifest, build_master
+from app.domain.playlist import (
+    Variant,
+    avc1_codec,
+    bandwidths,
+    build_manifest,
+    build_master,
+)
 
 REFERENCE = Path(__file__).resolve().parent.parent / "fixtures" / "reference" / "master.m3u8"
 
@@ -20,18 +28,25 @@ def test_avc1_unknown_profile_defaults_main():
     assert avc1_codec("Potato", 30).startswith("avc1.4d")
 
 
-# ---------- bandwidth: measured, not configured ----------
+# ---------- bandwidth: measured per segment ----------
 
-def test_bandwidth_is_measured_not_configured_target():
-    # a complex 720p source that landed well under its 2800k target
-    bw = bandwidth(output_bytes=6_000_000, duration=30.0)     # ~1.6 Mbps actual
+def test_bandwidths_report_peak_segment_and_true_average():
+    peak, average = bandwidths([
+        (500_000, 4.0),
+        (900_000, 4.0),
+        (100_000, 1.0),
+    ])
+
+    assert peak == 1_800_000
+    assert average == int(1_500_000 * 8 / 9.0)
     configured = int(PRESETS["720p"].v_bitrate.rstrip("k")) * 1000
-    assert bw != configured                                   # provably derived from real bytes
-    assert bw == int(6_000_000 * 8 / 30.0 * 1.1)
+    assert peak != configured
 
 
-def test_bandwidth_zero_duration_is_zero():
-    assert bandwidth(1_000_000, 0) == 0
+@pytest.mark.parametrize("segments", [[], [(100, 0)], [(100, -1)], [(-1, 1)]])
+def test_bandwidths_reject_invalid_measurements(segments):
+    with pytest.raises(ValueError):
+        bandwidths(segments)
 
 
 # ---------- build_master vs the golden reference ----------
@@ -59,17 +74,27 @@ def test_build_master_uses_actual_resolution_for_portrait():
     assert "RESOLUTION=404x720" in out                        # portrait stays portrait
 
 
+def test_build_master_emits_peak_and_average_bandwidth():
+    out = build_master([
+        Variant("360p", 1_120_000, 640, 360, "avc1.4d001e,mp4a.40.2", 840_000),
+    ])
+    assert "BANDWIDTH=1120000,AVERAGE-BANDWIDTH=840000" in out
+
+
 # ---------- manifest schema ----------
 
 def test_manifest_schema():
     v = [Variant("720p", 2156000, 1280, 720, "avc1.64001f,mp4a.40.2")]
     m = build_manifest("j1", 30.0, v, web_remuxed=True, created_at="2026-06-16T00:00:00+00:00",
+                       media_start_time=1.4,
                        storyboard={"url": "sprite.jpg", "tiles": 100, "cols": 10, "rows": 10,
                                    "tile_w": 160, "tile_h": 90, "interval": 0.3})
     assert set(m) == {"job_id", "duration", "renditions", "master", "web_mp4",
-                      "web_remuxed", "poster", "sprite", "storyboard", "created_at"}
+                      "web_remuxed", "poster", "sprite", "storyboard", "created_at",
+                      "media_start_time"}
     assert m["storyboard"]["cols"] == 10
     assert m["master"] == "master.m3u8" and m["web_mp4"] == "web.mp4"
+    assert m["media_start_time"] == 1.4
     assert m["renditions"][0] == {
         "preset": "720p", "bandwidth": 2156000,
         "resolution": "1280x720", "codecs": "avc1.64001f,mp4a.40.2",

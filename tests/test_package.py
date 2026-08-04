@@ -5,16 +5,49 @@ import pytest
 from app.workers.tasks import package as pkg
 
 
+def test_segment_measurements_follow_extinf_durations(tmp_path):
+    rendition = tmp_path / "360p"
+    rendition.mkdir()
+    (rendition / "seg_00000.ts").write_bytes(b"a" * 100)
+    (rendition / "seg_00001.ts").write_bytes(b"b" * 60)
+    playlist = rendition / "index.m3u8"
+    playlist.write_text(
+        "#EXTM3U\n#EXTINF:4.000,\nseg_00000.ts\n"
+        "#EXTINF:0.500,\nseg_00001.ts\n#EXT-X-ENDLIST\n"
+    )
+
+    assert pkg._segment_measurements(playlist) == [(100, 4.0), (60, 0.5)]
+
+
+@pytest.mark.parametrize("body", [
+    "#EXTM3U\n#EXT-X-ENDLIST\n",
+    "#EXTM3U\n#EXTINF:0,\nseg_00000.ts\n",
+    "#EXTM3U\n#EXTINF:nope,\nseg_00000.ts\n",
+    "#EXTM3U\n#EXTINF:4,\n",
+])
+def test_segment_measurements_reject_malformed_playlists(tmp_path, body):
+    playlist = tmp_path / "index.m3u8"
+    playlist.write_text(body)
+    (tmp_path / "seg_00000.ts").write_bytes(b"segment")
+
+    with pytest.raises(ValueError):
+        pkg._segment_measurements(playlist)
+
+
 def test_video_only_variant_does_not_advertise_aac(monkeypatch):
     monkeypatch.setattr(
         pkg,
         "_probe_variant",
-        lambda _path: {"profile": "High", "level": 31, "width": 1280, "height": 720},
+        lambda _path: ({"profile": "High", "level": 31, "width": 1280, "height": 720}, 1.4),
     )
+    monkeypatch.setattr(pkg, "_segment_measurements", lambda _path: [(500_000, 4.0)])
 
-    variant = pkg._variant("/job", "720p", 1_000_000, 30.0, has_audio=False)
+    variant, start_time = pkg._variant("/job", "720p", has_audio=False)
 
     assert variant.codecs == "avc1.64001f"
+    assert variant.bandwidth == 1_000_000
+    assert variant.average_bandwidth == 1_000_000
+    assert start_time == 1.4
 
 
 def test_non_web_safe_mp4_remuxes_the_finished_top_rendition(monkeypatch, tmp_path):

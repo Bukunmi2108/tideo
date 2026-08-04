@@ -1,4 +1,5 @@
 import json
+import math
 import shutil
 from html import escape
 from pathlib import Path
@@ -9,7 +10,7 @@ from redis.exceptions import RedisError
 from app.core.config import config
 from app.core.logging import bind_job, get_logger
 from app.domain.ladder import PRESETS
-from app.domain.playlist import Variant, avc1_codec, bandwidth, build_manifest
+from app.domain.playlist import Variant, avc1_codec, bandwidths, build_manifest
 from app.domain.state import TERMINAL
 from app.events.producer import emit
 from app.events.topics import JOB_COMPLETED
@@ -28,31 +29,69 @@ from app.workers.tasks.thumbs import write_poster, write_sprite
 log = get_logger()
 
 
-def _probe_variant(seg_path: str) -> dict:
+def _probe_variant(seg_path: str) -> tuple[dict, float]:
     out = run_process(
         ["ffprobe", "-v", "error", "-select_streams", "v:0",
-         "-show_entries", "stream=width,height,profile,level", "-of", "json", seg_path],
+         "-show_entries", "stream=width,height,profile,level:format=start_time",
+         "-of", "json", seg_path],
         capture_output=True,
         text=True,
         check=True,
         timeout=20,
     )
-    return json.loads(out.stdout)["streams"][0]
+    data = json.loads(out.stdout)
+    start_time = float(data["format"]["start_time"])
+    if not math.isfinite(start_time):
+        raise ValueError("rendition has an invalid media start time")
+    return data["streams"][0], start_time
+
+
+def _segment_measurements(playlist: Path) -> list[tuple[int, float]]:
+    """Read the simple FFmpeg VOD playlist and measure each referenced segment."""
+    base = playlist.parent.resolve()
+    measurements: list[tuple[int, float]] = []
+    duration: float | None = None
+    for raw in playlist.read_text().splitlines():
+        line = raw.strip()
+        if line.startswith("#EXTINF:"):
+            if duration is not None:
+                raise ValueError("rendition playlist has consecutive EXTINF tags")
+            try:
+                duration = float(line.removeprefix("#EXTINF:").split(",", 1)[0])
+            except ValueError as exc:
+                raise ValueError("rendition playlist has an invalid EXTINF duration") from exc
+            if not math.isfinite(duration) or duration <= 0:
+                raise ValueError("rendition playlist has a non-positive EXTINF duration")
+        elif line and not line.startswith("#"):
+            if duration is None:
+                raise ValueError("rendition playlist has a segment without EXTINF")
+            segment = (playlist.parent / line).resolve()
+            if not segment.is_relative_to(base):
+                raise ValueError("rendition playlist segment escapes its directory")
+            measurements.append((segment.stat().st_size, duration))
+            duration = None
+    if duration is not None or not measurements:
+        raise ValueError("rendition playlist has no complete media segments")
+    return measurements
 
 
 def _variant(
     job_dir: str,
     preset: str,
-    output_bytes: int,
-    duration: float,
     *,
     has_audio: bool,
-) -> Variant:
-    s = _probe_variant(f"{job_dir}/{preset}/seg_00000.ts")
+) -> tuple[Variant, float]:
+    s, start_time = _probe_variant(f"{job_dir}/{preset}/seg_00000.ts")
+    peak, average = bandwidths(
+        _segment_measurements(Path(job_dir) / preset / "index.m3u8")
+    )
     codecs = avc1_codec(s["profile"], int(s["level"]))
     if has_audio:
         codecs += ",mp4a.40.2"
-    return Variant(preset, bandwidth(output_bytes, duration), int(s["width"]), int(s["height"]), codecs)
+    return (
+        Variant(preset, peak, int(s["width"]), int(s["height"]), codecs, average),
+        start_time,
+    )
 
 
 def _highest(presets: list[str]) -> str:
@@ -114,16 +153,16 @@ def _package(results, job_id: str) -> dict:
         return _cancel_package(r, job_id, job_dir)
 
     renditions = [res for res in results if "preset" in res]
-    variants = [
+    measured_variants = [
         _variant(
             str(job_dir),
             res["preset"],
-            res["output_bytes"],
-            duration,
             has_audio=bool(meta.get("has_audio")),
         )
         for res in renditions
     ]
+    variants = [variant for variant, _ in measured_variants]
+    media_start_time = measured_variants[0][1]
 
     top = _highest([v.preset for v in variants])
     if is_cancelled(job_id):
@@ -158,13 +197,14 @@ def _package(results, job_id: str) -> dict:
         return _cancel_package(r, job_id, job_dir)
 
     manifest = build_manifest(job_id, duration, variants, web_remuxed=remuxed,
-                              created_at=cast(str, rec.get("created_at")), storyboard=storyboard)
+                              created_at=cast(str, rec.get("created_at")),
+                              media_start_time=media_start_time, storyboard=storyboard)
     with paths.atomic_path(job_dir / "manifest.json") as tmp:
         tmp.write_text(json.dumps(manifest, indent=2))
 
     # master last, via the shared writer: includes the subtitles track iff transcription already landed
     # the VTT (it runs alongside the ladder). If it lands later, the transcribe task rewrites master then.
-    refresh_master(job_dir, variants, duration)
+    refresh_master(job_dir, variants, duration, media_start_time=media_start_time)
 
     name = escape(cast(str, rec.get("source_filename", "")))  # filename is user input -> escape it
     # "playlist" is relative to /jobs/{id}/player -> resolves to /jobs/{id}/playlist

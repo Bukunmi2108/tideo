@@ -1,7 +1,32 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, type Page, type TestInfo } from "@playwright/test";
+import { readFile } from "node:fs/promises";
 
 export const JOB_ID = "browser-quality-gate";
+const PLAYER_FIXTURE_ROOT = new URL("./fixtures/player/", import.meta.url);
+
+
+export async function installPlayerMediaFixture(page: Page): Promise<void> {
+  await page.route("**/e2e/**", async (route) => {
+    const pathname = new URL(route.request().url()).pathname;
+    const relative = pathname.split("/e2e/", 2)[1] ?? "";
+    if (!relative || relative.includes("..")) {
+      await route.abort();
+      return;
+    }
+    try {
+      const body = await readFile(new URL(relative, PLAYER_FIXTURE_ROOT));
+      const contentType = relative.endsWith(".m3u8")
+        ? "application/vnd.apple.mpegurl"
+        : relative.endsWith(".vtt")
+          ? "text/vtt"
+          : "video/mp2t";
+      await route.fulfill({ status: 200, contentType, body });
+    } catch {
+      await route.fulfill({ status: 404, body: "fixture not found" });
+    }
+  });
+}
 
 const SOURCE = {
   container: "mov,mp4,m4a,3gp,3g2,mj2",

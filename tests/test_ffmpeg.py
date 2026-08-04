@@ -7,11 +7,12 @@ from app.workers.ffprobe import SourceMeta
 
 
 def meta(**kw) -> SourceMeta:
-    base = dict(
-        container="mp4", video_codec="h264", audio_codec="aac",
-        width=1920, height=1080, duration=30.0, bitrate=5_000_000, fps=30.0,
-        has_audio=True, video_streams=1, audio_streams=1,
-    )
+    base = {
+        "container": "mp4", "video_codec": "h264", "audio_codec": "aac",
+        "width": 1920, "height": 1080, "duration": 30.0,
+        "bitrate": 5_000_000, "fps": 30.0, "has_audio": True,
+        "video_streams": 1, "audio_streams": 1,
+    }
     base.update(kw)
     return SourceMeta(**base)
 
@@ -49,6 +50,15 @@ def test_audio_bitrate_is_per_preset():
     argv = build_rendition_argv(meta(), PRESETS["480p"], "in.mp4", "/o")
     i = argv.index("-b:a")
     assert argv[i + 1] == "96k"
+
+
+def test_240p_uses_the_low_bandwidth_profile():
+    argv = build_rendition_argv(meta(), PRESETS["240p"], "in.mp4", "/o")
+    assert argv[argv.index("-b:v") + 1] == "400k"
+    assert argv[argv.index("-maxrate") + 1] == "428k"
+    assert argv[argv.index("-bufsize") + 1] == "600k"
+    assert argv[argv.index("-b:a") + 1] == "64k"
+    assert "scale=w=426:h=240" in argv[argv.index("-vf") + 1]
 
 
 @pytest.mark.parametrize("fps,g", [(24.0, "48"), (60.0, "120")])

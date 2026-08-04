@@ -12,11 +12,17 @@ def test_gop_is_two_seconds_of_frames(fps, g):
     assert gop_size(fps) == g
 
 
-def test_catalog_has_the_four_rungs():
-    assert set(PRESETS) == {"1080p", "720p", "480p", "360p"}
+def test_catalog_has_the_five_rungs():
+    assert set(PRESETS) == {"1080p", "720p", "480p", "360p", "240p"}
     for name, p in PRESETS.items():
         assert p.name == name
         assert p.profile in ("high", "main")
+
+    low = PRESETS["240p"]
+    assert (low.width, low.height) == (426, 240)
+    assert (low.v_bitrate, low.maxrate, low.bufsize, low.a_bitrate) == (
+        "400k", "428k", "600k", "64k",
+    )
 
 
 def test_catalog_names_match_recommendation_ladder():

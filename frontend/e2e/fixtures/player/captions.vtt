@@ -1,0 +1,14 @@
+WEBVTT
+X-TIMESTAMP-MAP=LOCAL:00:00:00.000,MPEGTS:131580
+
+1
+00:00:00.500 --> 00:00:02.000
+Tideo playback fixture
+
+2
+00:00:02.000 --> 00:00:04.000
+Captions work during playback
+
+3
+00:00:06.000 --> 00:00:07.500
+Playback continued after the quiet gap

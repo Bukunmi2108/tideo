@@ -6,6 +6,7 @@ import {
   expectTouchSafeControls,
   installApiFixture,
   installClipboardFixture,
+  installPlayerMediaFixture,
   watchRuntimeErrors,
 } from "./support";
 
@@ -35,7 +36,7 @@ test("completed playback exposes quality, captions, share, download, and teardow
     await expect(quality).toHaveValue("0");
   }
   if (browserName !== "webkit")
-    await expect(page.getByRole("button", { name: "Captions" })).toBeVisible();
+    await expect(page.getByRole("button", { name: /captions/i })).toBeVisible();
   await expect(page.getByRole("link", { name: "Download MP4" })).toHaveAttribute("download", "");
   await expectNoAxeViolations(page, testInfo, "complete-player-quality");
   await expectNoHorizontalOverflow(page);
@@ -52,6 +53,58 @@ test("completed playback exposes quality, captions, share, download, and teardow
   await expect(page.getByText("No videos yet")).toBeVisible();
   await page.waitForTimeout(300);
   expect(playlistRequests).toBe(requestsBeforeNavigation);
+  expect(runtimeErrors).toEqual([]);
+});
+
+test("automatic playback waits for Play and captions activate midstream", async ({ page, browserName }) => {
+  test.skip(browserName !== "chromium", "Real HLS media behavior is covered once in Chromium.");
+  const runtimeErrors = watchRuntimeErrors(page);
+  const segmentRequests: string[] = [];
+  page.on("request", (request) => {
+    if (request.url().endsWith(".ts")) segmentRequests.push(request.url());
+  });
+  await installClipboardFixture(page);
+  await installApiFixture(page, "done", []);
+  await installPlayerMediaFixture(page);
+
+  await page.goto(`/job?id=${JOB_ID}`);
+  const quality = page.getByRole("combobox", { name: "Playback quality" });
+  await expect.poll(async () => quality.locator("option").count()).toBe(3);
+  expect(segmentRequests).toEqual([]);
+
+  await page.getByRole("button", { name: "Play video" }).click();
+  await expect.poll(() => segmentRequests.length).toBeGreaterThan(0);
+  expect(segmentRequests[0]).toContain("/240p/");
+  await expect(quality.locator("option").first()).toContainText(/Auto · (240|480)p/);
+
+  const video = page.locator("video");
+  await expect.poll(() => video.evaluate((element) => (element as HTMLVideoElement).duration)).toBeGreaterThan(7);
+  await video.evaluate((element) => {
+    const media = element as HTMLVideoElement;
+    media.pause();
+    media.currentTime = 2.5;
+  });
+  const captions = page.locator(".pl-cc");
+  await page.locator(".player").hover();
+  await expect(captions).toBeVisible();
+  await expect(captions).toHaveAttribute("aria-label", "Turn captions on");
+  await captions.click();
+  await expect(captions).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByRole("status").filter({ hasText: "Captions on" })).toBeVisible();
+  await expect.poll(() => video.evaluate((element) => {
+    const track = (element as HTMLVideoElement).textTracks[0];
+    return Array.from(track?.activeCues ?? [])
+      .map((cue) => (cue as VTTCue).text)
+      .join(" ");
+  })).toContain("Captions work during playback");
+
+  await video.evaluate((element) => {
+    (element as HTMLVideoElement).currentTime = 5;
+  });
+  await expect.poll(() => video.evaluate((element) =>
+    (element as HTMLVideoElement).textTracks[0]?.activeCues?.length ?? 0,
+  )).toBe(0);
+  await expect(captions).toHaveAttribute("aria-pressed", "true");
   expect(runtimeErrors).toEqual([]);
 });
 

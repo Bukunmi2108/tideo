@@ -31,9 +31,10 @@ def test_refresh_master_includes_subs_only_when_vtt_present(tmp_path):
     assert not (tmp_path / "subs.m3u8").exists()
 
     (tmp_path / "subtitles.vtt").write_text("WEBVTT\n\n")
-    S.refresh_master(tmp_path, V, 30.0)                      # idempotent re-run, now with the VTT on disk
+    S.refresh_master(tmp_path, V, 30.0, media_start_time=1.4)
     assert 'SUBTITLES="subs"' in (tmp_path / "master.m3u8").read_text()
     assert (tmp_path / "subs.m3u8").exists()
+    assert "MPEGTS:126000" in (tmp_path / "subtitles.vtt").read_text()
 
 
 def test_attach_subtitles_noops_before_packaging(tmp_path, monkeypatch):
@@ -46,10 +47,26 @@ def test_attach_subtitles_noops_before_packaging(tmp_path, monkeypatch):
 def test_attach_subtitles_rewrites_master_when_packaged(tmp_path, monkeypatch):
     monkeypatch.setattr(S.paths, "output_dir", lambda jid: tmp_path)
     (tmp_path / "manifest.json").write_text(json.dumps({"renditions": [
-        {"preset": "720p", "bandwidth": 1000, "resolution": "1280x720", "codecs": "avc1.4d401f,mp4a.40.2"}]}))
+        {"preset": "720p", "bandwidth": 1000, "average_bandwidth": 900,
+         "resolution": "1280x720", "codecs": "avc1.4d401f,mp4a.40.2"}],
+        "media_start_time": 1.4}))
     (tmp_path / "subtitles.vtt").write_text("WEBVTT\n\n")
     assert S.attach_subtitles("j", 30.0) is True
     assert 'SUBTITLES="subs"' in (tmp_path / "master.m3u8").read_text()
+    assert "MPEGTS:126000" in (tmp_path / "subtitles.vtt").read_text()
+    assert "AVERAGE-BANDWIDTH=900" in (tmp_path / "master.m3u8").read_text()
+
+
+def test_attach_subtitles_probes_start_time_for_an_older_manifest(tmp_path, monkeypatch):
+    monkeypatch.setattr(S.paths, "output_dir", lambda jid: tmp_path)
+    monkeypatch.setattr(S, "_probe_media_start", lambda *_args: 1.4)
+    (tmp_path / "manifest.json").write_text(json.dumps({"renditions": [
+        {"preset": "720p", "bandwidth": 1000,
+         "resolution": "1280x720", "codecs": "avc1.4d401f,mp4a.40.2"}]}))
+    (tmp_path / "subtitles.vtt").write_text("WEBVTT\n\n")
+
+    assert S.attach_subtitles("j", 30.0) is True
+    assert "MPEGTS:126000" in (tmp_path / "subtitles.vtt").read_text()
 
 
 def test_refresh_master_cannot_overwrite_new_subtitles_with_stale_playlist(tmp_path, monkeypatch):
@@ -66,11 +83,12 @@ def test_refresh_master_cannot_overwrite_new_subtitles_with_stale_playlist(tmp_p
     monkeypatch.setattr(S, "build_master", delayed_build)
 
     with ThreadPoolExecutor(max_workers=2) as pool:
-        first = pool.submit(S.refresh_master, tmp_path, V, 30.0)
+        first = pool.submit(S.refresh_master, tmp_path, V, 30.0, media_start_time=1.4)
         assert no_subtitles_started.wait(1)
         (tmp_path / "subtitles.vtt").write_text("WEBVTT\n\n")
-        second = pool.submit(S.refresh_master, tmp_path, V, 30.0)
+        second = pool.submit(S.refresh_master, tmp_path, V, 30.0, media_start_time=1.4)
         first.result()
         second.result()
 
     assert 'SUBTITLES="subs"' in (tmp_path / "master.m3u8").read_text()
+    assert "MPEGTS:126000" in (tmp_path / "subtitles.vtt").read_text()
