@@ -34,7 +34,8 @@ test("overview routes into the upload journey with keyboard and route focus", as
   await expect(page.getByRole("heading", { level: 1, name: "Upload video" })).toBeFocused();
   await expectNoAxeViolations(page, testInfo, "upload-idle");
 
-  expect(loadedScripts.some((url) => /(?:player|hls\.js)/i.test(url)), loadedScripts.join("\n")).toBe(false);
+  // Overview now owns a checked-in adaptive demo, so its player chunk is intentional.
+  expect(loadedScripts.some((url) => /(?:player|hls\.js)/i.test(url)), loadedScripts.join("\n")).toBe(true);
   expect(runtimeErrors).toEqual([]);
 });
 

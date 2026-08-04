@@ -112,6 +112,14 @@ describe("player", () => {
     quality.dispatchEvent(new Event("change", { bubbles: true }));
     expect(hls.currentLevel).toBe(-1);
 
+    expect(handle.selectQuality(480)).toBe(true);
+    expect(hls.currentLevel).toBe(0);
+    expect(quality.value).toBe("0");
+
+    expect(handle.selectQuality(null)).toBe(true);
+    expect(hls.currentLevel).toBe(-1);
+    expect(quality.value).toBe("-1");
+
     handle.destroy();
     expect(hls.destroy).toHaveBeenCalledOnce();
   });
@@ -149,6 +157,26 @@ describe("player", () => {
     (root.querySelector(".pl-play") as HTMLButtonElement).click();
     await vi.waitFor(() => expect(video.play).toHaveBeenCalledTimes(2));
     expect(hls.startLoad).toHaveBeenCalledOnce();
+
+    await handle.play();
+    expect(video.play).toHaveBeenCalledTimes(2);
+
+    handle.destroy();
+  });
+
+  it("queues a homepage quality choice made before the manifest is ready", () => {
+    const handle = mountPlayer(root, { playlist: "/master.m3u8" });
+    const hls = hlsState.instances[0] as any;
+    const parsedLevels = hls.levels;
+    hls.levels = [];
+
+    expect(handle.selectQuality(720)).toBe(true);
+    expect(hls.currentLevel).toBe(-1);
+
+    hls.levels = parsedLevels;
+    hls.emit("manifest-parsed");
+    expect(hls.currentLevel).toBe(1);
+    expect((root.querySelector(".pl-quality-select") as HTMLSelectElement).value).toBe("1");
 
     handle.destroy();
   });
