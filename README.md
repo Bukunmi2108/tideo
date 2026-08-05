@@ -3,10 +3,11 @@
 **Upload one video, get back an adaptive-quality stream.** Tideo turns a single source file into a
 full HLS ladder - every resolution encoded in parallel, with poster, scrubbable storyboard, an embed
 player, and optional captions. It's the thing YouTube does in the first minutes after an upload, built
-as a real distributed pipeline you can run, break, and watch scale.
+as a real distributed pipeline you can run and break.
 
 **[▶ Live](https://tideo.vercel.app/)** &nbsp;·&nbsp;
 [API & docs](https://tideo-api.duckdns.org/docs) &nbsp;·&nbsp;
+[**Case study**](docs/case_study.md) &nbsp;·&nbsp;
 [Source](https://github.com/Bukunmi2108/tideo)
 
 > The live backend runs on the Workspace VPS. Outputs are temporary and expire after the configured
@@ -42,14 +43,7 @@ fans back into a single HLS package, and the job goes `done`.
 
 Two brokers, on purpose — the project is a deliberate study of distributed-systems patterns.
 
-```
-            ┌─────────────── Kafka (KRaft) ───────────────┐   facts: append-only, replay-safe
- FastAPI ──▶│  topic media-jobs  (partitioned by job_id)  │──▶ dispatcher ──▶ RabbitMQ ──▶ Celery
-   API      └──────────────────────────────────────────────┘   (only bridge)   commands    workers
-    │                                                                │                      heavy+fast
-    ├─ Redis ── hot state · live progress (pub/sub) · dedupe + refcount counters            │
-    └─ Postgres ── cold/terminal state · event audit log  ◀──────────── audit consumer ─────┘
-```
+![Three lanes — commands on RabbitMQ, facts on Kafka, and state in Redis, Postgres and disk — with the dispatcher as the only bridge.](docs/assets/02-runtime-architecture.svg)
 
 - **RabbitMQ carries commands** — "do this work, once, soon." Acked, then deleted. Competing consumers.
 - **Kafka carries facts** — "this happened, remember it." Append-only, per-`job_id` ordering, replayed
@@ -59,6 +53,18 @@ Two brokers, on purpose — the project is a deliberate study of distributed-sys
   replaying the audit log never re-runs a transcode.
 - **Redis** holds hot state and streams progress over pub/sub to the browser via WebSocket; **Postgres**
   is the cold store for terminal jobs, per-rendition outcomes, and the event audit log.
+
+## Case study
+
+**[What I learned building this →](docs/case_study.md)**
+
+The long version, with seven diagrams: why nothing expensive starts before you press a button, how the
+HLS ladder is packaged and why the master playlist is written last, and the four failure drills that
+showed the first design was wrong — including a cancel that left two FFmpeg processes running, and an
+idempotency guard that permanently lost a job.
+
+It is also honest about the parts that did not work out: four workers were *slower* than two on a
+four-core box, and one of the five chaos drills was never run.
 
 ## Guest ownership
 
@@ -86,9 +92,9 @@ not carry the guest token in a URL, playlist, log, or referrer.
 | `app/` | backend — `api/` routes, `workers/` (inspect/rendition/package/transcribe/cleanup), `dispatcher/`, `domain/` (ladder, errors, state, playlist), `events/` (Kafka), `storage/` (Redis, Postgres, dedupe, pressure) |
 | `frontend/` | Vite vanilla-TS SPA — `router.ts`, `landing.ts`, `upload.ts`, `history.ts`, `job.ts`, `player.ts`, `sprite.ts` |
 | `deploy/` | sleep-aware Workspace VPS deployment |
-| `docs/` | `PLAN.md`, phase writeups, ADRs, chaos drills |
+| `docs/` | [`case_study.md`](docs/case_study.md) + its diagrams in `assets/` (build notes, ADRs and drill records stay local) |
 | `fixtures/` · `scripts/` | generated test videos + their build/verify scripts |
-| `tests/` | ~43 pytest files incl. a classified FFmpeg-stderr corpus and chaos drills |
+| `tests/` | 55 pytest files incl. a classified FFmpeg-stderr corpus and chaos drills |
 
 ## Run it locally
 
@@ -116,9 +122,9 @@ npm run check:browser
 ```
 
 The Vercel project root is `frontend/`; `frontend/vercel.json` owns the SPA fallback and browser
-security headers. Its CSP temporarily allows inline styles because progress, storyboard, and player
-positioning use element style attributes. Remove that exception when those styles move behind classes
-or CSS custom properties during the design-system phase.
+security headers. Its CSP allows inline styles because progress, storyboard, and player positioning
+are set through element style attributes; moving those behind CSS custom properties would let the
+exception go.
 
 ## Workspace VPS
 
