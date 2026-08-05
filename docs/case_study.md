@@ -1,6 +1,6 @@
 # FFmpeg was the easy part
 
-## What I learned building a distributed video pipeline — and the four failures that redrew it
+## What I learned building a distributed video pipeline and the four failures that redrew it
 
 People talk about FFmpeg as though it were a load-bearing wall of the internet. One
 project, one impossible command-line interface, and every video you have ever watched
