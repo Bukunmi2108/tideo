@@ -1,5 +1,7 @@
-# --- Project-private (kept out of the repo) ---
-docs/
+# --- Project-private (kept out of the repo), except the published case study ---
+docs/*
+!docs/assets/
+!docs/case_study.md
 
 # --- Secrets / local env ---
 .env
