@@ -1,6 +1,6 @@
-# I built a video pipeline. The most important part was a pause.
+# FFmpeg was the easy part
 
-## What Tideo taught me about adaptive video, failed assumptions, and honest limits
+## What I learned building a distributed video pipeline — and the four failures that redrew it
 
 People talk about FFmpeg as though it were a load-bearing wall of the internet. One
 project, one impossible command-line interface, and every video you have ever watched
@@ -545,7 +545,8 @@ largest proven risk for a real user.
 
 ## What I learned
 
-I started Tideo to learn adaptive video. I finished with a much broader set of lessons.
+I came to find out what FFmpeg really is. The answer is that it is a very good, very well-documented
+tool that does what you ask, and that almost nothing I found difficult was its fault.
 
 ### Which system carries what
 
